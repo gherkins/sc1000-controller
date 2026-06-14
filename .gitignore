@@ -1,0 +1,13 @@
+# build artifacts / heavy caches
+build/out/
+build/cache/
+build/work/
+build/buildroot-*/
+build/SC1000/
+
+# compiled objects
+*.o
+*.d
+
+# macOS
+.DS_Store

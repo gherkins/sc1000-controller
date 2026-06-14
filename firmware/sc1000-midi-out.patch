@@ -1,0 +1,97 @@
+diff --git a/software/Makefile b/software/Makefile
+index f9b7079..ffb35b0 100644
+--- a/software/Makefile
++++ b/software/Makefile
+@@ -63,6 +63,7 @@ OBJS = controller.o \
+ 	sc_midimap.o \
+ 	dicer.o \
+ 	midi.o \
++	sc_midi_out.o \
+ 	xwax.o
+ DEVICE_CPPFLAGS = -DWITH_ALSA
+ DEVICE_LIBS = $(ALSA_LIBS)
+diff --git a/software/sc_input.c b/software/sc_input.c
+index 5a286ec..7ecba56 100644
+--- a/software/sc_input.c
++++ b/software/sc_input.c
+@@ -29,6 +29,7 @@
+ #include "sc_midimap.h"
+ #include "dicer.h"
+ #include "midi.h"
++#include "sc_midi_out.h"
+ 
+ bool shifted = 0;
+ bool shiftLatched = 0;
+@@ -847,6 +848,9 @@ void *SC_InputThread(void *ptr)
+ 
+ 	sleep(2);
+ 
++	// Bring up the USB-MIDI gadget output (Route 1 controller mode)
++	sc_midi_out_init();
++
+ 	int secondCount = 0;
+ 
+ 	while (1) // Main input loop
+@@ -912,6 +916,9 @@ void *SC_InputThread(void *ptr)
+ 			}
+ 
+ 			process_rot();
++
++			// Emit crossfader/volume/jog/touch to the USB-MIDI gadget for the host
++			sc_midi_out_update(deck[1].encoderAngle, ADCs[0], ADCs[1], ADCs[2], ADCs[3], capIsTouched);
+ 		}
+ 		else // couldn't find input processor, just play the tracks
+ 		{
+diff --git a/software/xwax.c b/software/xwax.c
+index de7ff7f..375a74f 100644
+--- a/software/xwax.c
++++ b/software/xwax.c
+@@ -112,6 +112,11 @@ void loadSettings()
+ 	scsettings.jogReverse = 0;
+ 	scsettings.cutbeats = 0;
+ 
++	scsettings.midiout = 1;
++	scsettings.midioutchannel = 0;
++	scsettings.midioutrate = 1000;
++	scsettings.midioutdev[0] = '\0';
++
+ 	// later we'll check for sc500 pin and use it to set following settings
+ 	scsettings.disablevolumeadc = 0;
+ 	scsettings.disablepicbuttons = 0;
+@@ -167,6 +172,19 @@ void loadSettings()
+ 					scsettings.jogReverse = atoi(value);
+ 				else if (strcmp(param, "cutbeats") == 0)
+ 					scsettings.cutbeats = atoi(value);
++				else if (strcmp(param, "midiout") == 0)
++					scsettings.midiout = atoi(value);
++				else if (strcmp(param, "midioutchannel") == 0)
++					scsettings.midioutchannel = atoi(value);
++				else if (strcmp(param, "midioutrate") == 0)
++					scsettings.midioutrate = atoi(value);
++				else if (strcmp(param, "midioutdev") == 0)
++				{
++					strncpy(scsettings.midioutdev, value, sizeof(scsettings.midioutdev) - 1);
++					scsettings.midioutdev[sizeof(scsettings.midioutdev) - 1] = '\0';
++					for (int ci = strlen(scsettings.midioutdev) - 1; ci >= 0 && (scsettings.midioutdev[ci] == '\n' || scsettings.midioutdev[ci] == '\r' || scsettings.midioutdev[ci] == ' '); ci--)
++						scsettings.midioutdev[ci] = '\0';
++				}
+ 				else if (strstr(param, "midii") != NULL)
+ 				{
+ 					scsettings.midiRemapped = 1;
+diff --git a/software/xwax.h b/software/xwax.h
+index 230cbd7..0d81f87 100644
+--- a/software/xwax.h
++++ b/software/xwax.h
+@@ -92,6 +92,12 @@ typedef struct SC_SETTINGS {
+ 	
+ 	double initialVolume;
+ 
++    // --- USB-MIDI controller output (Route 1 gadget) ---
++    int midiout;          // 1 = emit fader/jog/touch as USB-MIDI, 0 = off
++    int midioutchannel;   // MIDI channel 0-15
++    int midioutrate;      // microseconds between MIDI flushes (throttle)
++    char midioutdev[64];  // ALSA rawmidi device ("" = auto-detect gadget)
++
+     bool midiRemapped;
+     bool ioRemapped;
+ 

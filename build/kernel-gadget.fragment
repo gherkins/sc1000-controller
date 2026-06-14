@@ -1,0 +1,31 @@
+# Kernel config fragment for SC1000 "Route 1" USB-MIDI controller mode.
+# Merged into the sunxi kernel .config by buildroot
+# (BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES). Forces the A13 OTG (musb) controller
+# into dual-role so it can act as a USB device, and builds the legacy USB-MIDI
+# gadget (g_midi), which auto-binds at boot and presents an ALSA rawmidi device.
+
+# --- A13 OTG / musb in dual-role (peripheral-capable) ---
+CONFIG_USB_MUSB_HDRC=y
+CONFIG_USB_MUSB_SUNXI=y
+CONFIG_USB_MUSB_DUAL_ROLE=y
+CONFIG_NOP_USB_XCEIV=y
+CONFIG_USB_PHY=y
+
+# --- USB gadget framework ---
+CONFIG_USB_GADGET=y
+CONFIG_USB_LIBCOMPOSITE=y
+
+# --- ALSA bits the MIDI function needs (codec already pulls SND in) ---
+CONFIG_SND=y
+CONFIG_SND_RAWMIDI=y
+CONFIG_SND_SEQUENCER=y
+
+# --- Legacy USB MIDI gadget: builds g_midi, auto-binds to the UDC at boot ---
+CONFIG_USB_F_MIDI=y
+CONFIG_USB_MIDI_GADGET=y
+
+# Optional (configfs route, if we later want a custom device name / composite):
+# CONFIG_USB_CONFIGFS=y
+# CONFIG_USB_CONFIGFS_F_MIDI=y
+# Optional debug console over USB-serial (handy if MIDI doesn't show up):
+# CONFIG_USB_G_SERIAL=y

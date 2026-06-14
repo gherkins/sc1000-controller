@@ -1,0 +1,3 @@
+# Upstream SC1000 sources mix LF/CRLF; keep the patch bytes exactly as generated
+# so it isn't re-normalised on checkout (build.sh normalises to LF at build time).
+firmware/sc1000-midi-out.patch -text
