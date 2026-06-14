@@ -58,17 +58,26 @@ echo "==> Building toolchain + alsa-lib + kernel (first run is slow, ~30-60 min)
 make -C "$BR" toolchain alsa-lib linux
 
 # --- 3. Cross-compile our xwax ------------------------------------------------
-CC="$(ls "$BR"/output/host/bin/*-linux-*-gcc 2>/dev/null | head -1 || true)"
-[ -z "${CC:-}" ] && CC="$(ls "$BR"/output/host/usr/bin/*-linux-*-gcc 2>/dev/null | head -1 || true)"
-[ -z "${CC:-}" ] && { echo "!! could not find cross gcc under $BR/output/host"; exit 1; }
+CC=""
+for cand in "$BR"/output/host/bin/*-linux-*-gcc "$BR"/output/host/usr/bin/*-linux-*-gcc; do
+  if [ -x "$cand" ]; then CC="$cand"; break; fi
+done
+if [ -z "$CC" ]; then echo "!! could not find cross gcc under $BR/output/host"; exit 1; fi
 echo "==> CC=$CC"
 make -C "$WORK/software" clean || true
-make -C "$WORK/software" CC="$CC" SDL_LIBS="-lpthread -liconv" ALSA_LIBS="-lasound"
+# NB: no -liconv — uClibc provides iconv in libc, and upstream's Makefile doesn't
+# link it either (its first `SDL_LIBS ?=` wins). Adding it breaks the link.
+make -C "$WORK/software" CC="$CC" SDL_LIBS="-lpthread" ALSA_LIBS="-lasound"
 
 # --- 4. Patch the device tree: usb0 (OTG) -> peripheral -----------------------
-DTC="$(find "$BR/output/host" -name dtc -type f | head -1)"
+DTC=""
+for c in "$BR"/output/host/bin/linux-dtc "$BR"/output/host/bin/dtc; do
+  if [ -x "$c" ]; then DTC="$c"; break; fi
+done
+if [ -z "$DTC" ]; then DTC="$(find "$BR/output" -type f -name dtc 2>/dev/null | head -1)"; fi
+if [ -z "$DTC" ]; then echo "!! dtc not found under $BR/output"; exit 1; fi
 DTB_IN="$(find "$BR/output" -name sun5i-a13-olinuxino.dtb | head -1)"
-echo "==> Patching DTB: $DTB_IN"
+echo "==> Patching DTB: $DTB_IN  (dtc: $DTC)"
 "$DTC" -I dtb -O dts "$DTB_IN" -o "$SCRATCH/sc.dts" 2>/dev/null
 if grep -q 'dr_mode = "otg"' "$SCRATCH/sc.dts"; then
   sed -i 's/dr_mode = "otg"/dr_mode = "peripheral"/' "$SCRATCH/sc.dts"

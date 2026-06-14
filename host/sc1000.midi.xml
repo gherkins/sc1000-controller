@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MixxxControllerPreset mixxxVersion="2.3.0+" schemaVersion="1">
+  <info>
+    <name>SC1000 Controller</name>
+    <author>sc1000-controller</author>
+    <description>Scratch a Mixxx deck with the SC1000 jog wheel; crossfader/pots as volume.</description>
+  </info>
+  <controller id="SC1000">
+    <scriptfiles>
+      <file filename="sc1000-scripts.js" functionprefix="SC1000"/>
+    </scriptfiles>
+    <controls>
+
+      <!-- Jog rotation: CC 20 (relative) -> scratch / pitch -->
+      <control>
+        <group>[Channel1]</group>
+        <key>SC1000.jogTick</key>
+        <status>0xB0</status>
+        <midino>0x14</midino>
+        <options><script-binding/></options>
+      </control>
+
+      <!-- Jog touch: Note 20 on -> scratch enable -->
+      <control>
+        <group>[Channel1]</group>
+        <key>SC1000.jogTouch</key>
+        <status>0x90</status>
+        <midino>0x14</midino>
+        <options><script-binding/></options>
+      </control>
+      <!-- Jog touch: Note 20 off -> scratch disable -->
+      <control>
+        <group>[Channel1]</group>
+        <key>SC1000.jogTouch</key>
+        <status>0x80</status>
+        <midino>0x14</midino>
+        <options><script-binding/></options>
+      </control>
+
+      <!-- TENTATIVE fader/pot map: confirm which physical control sends which CC
+           with a MIDI monitor first, then adjust group/key/midino as needed. -->
+
+      <!-- Crossfader input 1: CC 16 -> deck 1 volume (the "cut") -->
+      <control>
+        <group>[Channel1]</group>
+        <key>volume</key>
+        <status>0xB0</status>
+        <midino>0x10</midino>
+        <options><normal/></options>
+      </control>
+
+      <!-- Volume pot 1: CC 18 -> deck 1 gain -->
+      <control>
+        <group>[Channel1]</group>
+        <key>pregain</key>
+        <status>0xB0</status>
+        <midino>0x12</midino>
+        <options><normal/></options>
+      </control>
+
+    </controls>
+    <outputs/>
+  </controller>
+</MixxxControllerPreset>
