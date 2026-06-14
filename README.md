@@ -10,6 +10,15 @@ case**.
 > device named **`MIDI Gadget`**, streaming the crossfader, jog wheel, volume
 > pots, jog-touch and the back buttons as MIDI.
 
+> ⚠️ **Disclaimer — use entirely at your own risk.** This is experimental,
+> unofficial firmware. It rebuilds and flashes your device's kernel, device tree
+> and boot partition, and it can **brick, damage, or "fry" your SC1000 / SC500**
+> (or anything you connect it to). **You alone are responsible for whatever
+> happens to your hardware.** There is **no warranty of any kind** (see GPLv2
+> §11–12). Keep the factory backup (`build/make-stock.sh`) and read the recovery
+> notes *before* you flash. If you're not comfortable recovering a device that
+> won't boot, don't flash it.
+
 This is an **add-on layer** on top of the SC1000 firmware (which is a fork of
 [xwax](https://xwax.org)). The stock firmware *receives* MIDI (e.g. Dicer
 controllers); this adds the missing piece — making the SC1000 *be* a MIDI
@@ -129,13 +138,6 @@ If you build this yourself, these will save you days:
   (`__fini_array_end isn't defined`).
 - The device usually mounts the stick **read-only**; for on-device logging,
   `mount -o remount,rw` first (see `build/diag/`).
-
-## Roadmap
-
-- [ ] Mixxx mapping finalised (`engine.scratch*`) — scratch a dropped sample
-- [ ] Custom JUCE VST: drop a sample, jog scrubs it, fader gates, waveform+playhead
-- [ ] Front Start/Shift + top cue buttons → MIDI (GPIO/IO-mapping path)
-- [ ] Upstream PR to rasteri/SC1000 (additive, behind a setting)
 
 ## Credits & license
 
