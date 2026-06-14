@@ -99,7 +99,14 @@ done
 ( cd "$STAGE" && tar -cf "$OUT/sc.tar" * )
 rm -rf "$STAGE"
 
+# Assemble a ready-to-copy USB stick kit: the updater script (which boots as
+# /media/sda/xwax and extracts the payload) + our payload (sc.tar).
+mkdir -p "$OUT/stick"
+cp "$OUT/sc.tar" "$OUT/stick/sc.tar"
+cp "$WORK/updater/xwax" "$OUT/stick/xwax"
+
 echo
-echo "==> DONE: $OUT/sc.tar"
-echo "    Copy it to a FAT32 USB stick, insert it, hold a beat button, power on."
-ls -la "$OUT/sc.tar"
+echo "==> DONE. USB stick kit ready in: $OUT/stick/"
+echo "    Copy BOTH files (xwax + sc.tar) to the root of a FAT32 stick, insert it,"
+echo "    hold a beat button, and power on (the device says 'successful')."
+ls -la "$OUT/stick/"
