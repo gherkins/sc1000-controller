@@ -11,6 +11,12 @@ CONFIG_USB_MUSB_DUAL_ROLE=y
 CONFIG_NOP_USB_XCEIV=y
 CONFIG_USB_PHY=y
 
+# --- USB mass storage: REQUIRED to mount the sample/firmware USB stick.
+#     sunxi_defconfig does NOT enable this, so without it /dev/sda1 never appears
+#     and the stick can't mount (no samples, no updates, no diagnostic). ---
+CONFIG_USB_STORAGE=y
+CONFIG_USB_UAS=y
+
 # --- USB gadget framework ---
 CONFIG_USB_GADGET=y
 CONFIG_USB_LIBCOMPOSITE=y

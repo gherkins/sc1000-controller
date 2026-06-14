@@ -10,8 +10,9 @@
  *   CC 17  crossfader input 2   (0..127)
  *   CC 18  volume pot 1         (0..127)
  *   CC 19  volume pot 2         (0..127)
- *   CC 20  jog, relative two's-complement 7-bit (1..63 fwd, 127..65 rev)
- *   Note 20 jog touch (note-on touched, note-off released)
+ *   CC 20    jog, relative two's-complement 7-bit (1..63 fwd, 127..65 rev)
+ *   Note 20  jog touch (note-on touched, note-off released)
+ *   Note 21-24  buttons (PIC: sample/beat prev/next) - map any to start/stop etc.
  *
  * This is an SC1000-specific addition (not part of upstream xwax).
  */
@@ -35,6 +36,10 @@
 #define CC_VOLUME2    19
 #define CC_JOG        20
 #define NOTE_JOGTOUCH 20
+#define NOTE_BUTTON0  21 /* PIC buttons 0..3 -> notes 21..24 */
+
+/* the 4 PIC buttons (back panel: sample/beat prev/next), read in sc_input.c */
+extern unsigned char buttons[4];
 
 static struct midi out;
 static bool ready = false;
@@ -143,9 +148,13 @@ static void send3(unsigned char s, unsigned char d1, unsigned char d2)
 	midi_write(&out, buf, 3);
 }
 
-static void send_cc_if_changed(int cc, int val7, int *prev)
+/* Send a CC only when it moves at least `deadband` LSB (or hits an extreme),
+   to suppress the +/-1 LSB ADC jitter that otherwise floods the bus. */
+static void send_cc(int cc, int val7, int *prev, int deadband)
 {
-	if (val7 != *prev)
+	if (val7 == *prev)
+		return;
+	if (val7 == 0 || val7 == 127 || abs(val7 - *prev) >= deadband)
 	{
 		send3(0xB0 | (scsettings.midioutchannel & 0x0F),
 			  (unsigned char)cc, (unsigned char)val7);
@@ -187,11 +196,11 @@ void sc_midi_out_update(int encoderAngle, unsigned int adc0, unsigned int adc1,
 
 	unsigned char ch = scsettings.midioutchannel & 0x0F;
 
-	/* Faders / pots: 10-bit -> 7-bit, only on change */
-	send_cc_if_changed(CC_XFADER1, adc0 >> 3, &prevX1);
-	send_cc_if_changed(CC_XFADER2, adc1 >> 3, &prevX2);
-	send_cc_if_changed(CC_VOLUME1, adc2 >> 3, &prevV1);
-	send_cc_if_changed(CC_VOLUME2, adc3 >> 3, &prevV2);
+	/* Faders / pots: 10-bit -> 7-bit, with a deadband against +/-1 LSB jitter */
+	send_cc(CC_XFADER1, adc0 >> 3, &prevX1, 2);
+	send_cc(CC_XFADER2, adc1 >> 3, &prevX2, 2);
+	send_cc(CC_VOLUME1, adc2 >> 3, &prevV1, 2);
+	send_cc(CC_VOLUME2, adc3 >> 3, &prevV2, 2);
 
 	/* Jog touch: note on/off */
 	int tnow = touched ? 1 : 0;
@@ -203,6 +212,23 @@ void sc_midi_out_update(int encoderAngle, unsigned int adc0, unsigned int adc1,
 			send3(0x80 | ch, NOTE_JOGTOUCH, 0);
 		prevTouched = tnow;
 	}
+
+	/* Buttons (PIC: back sample/beat prev/next) -> notes 21..24.
+	   Map any to start/stop, cue, load, etc. in the host. */
+	static int prevButtons = 0;
+	int curButtons = (buttons[0] ? 1 : 0) | (buttons[1] ? 2 : 0) |
+					 (buttons[2] ? 4 : 0) | (buttons[3] ? 8 : 0);
+	for (int bi = 0; bi < 4; bi++)
+	{
+		if (((curButtons >> bi) & 1) != ((prevButtons >> bi) & 1))
+		{
+			if ((curButtons >> bi) & 1)
+				send3(0x90 | ch, NOTE_BUTTON0 + bi, 127);
+			else
+				send3(0x80 | ch, NOTE_BUTTON0 + bi, 0);
+		}
+	}
+	prevButtons = curButtons;
 
 	/* Jog movement: accumulated delta since last flush, handling platter wrap */
 	if (prevAngle < 0)

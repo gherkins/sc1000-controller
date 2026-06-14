@@ -55,7 +55,11 @@ cp "$WORK/os/buildroot/buildroot_config" "$BR/.config"
 sed -i "s|^BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES=.*|BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES=\"$HERE/kernel-gadget.fragment\"|" "$BR/.config"
 make -C "$BR" olddefconfig
 echo "==> Building toolchain + alsa-lib + kernel (first run is slow, ~30-60 min)"
-make -C "$BR" toolchain alsa-lib linux
+make -C "$BR" toolchain alsa-lib
+# linux-reconfigure re-applies sunxi_defconfig + our kernel-gadget.fragment and
+# rebuilds the kernel. Needed because buildroot won't re-run kernel configure on
+# its own just because the fragment file changed.
+make -C "$BR" linux-reconfigure
 
 # --- 3. Cross-compile our xwax ------------------------------------------------
 CC=""
@@ -86,6 +90,12 @@ elif grep -q 'dr_mode = "host"' "$SCRATCH/sc.dts"; then
 else
   echo "!! WARNING: no dr_mode found to flip - inspect $SCRATCH/sc.dts (node usb@1c13000)"
 fi
+# SC1000 USB0 has no GPIO VBUS/ID detection (HW straps VBUS-detect high), but the
+# OLinuXino DTB reads them via GPIOs PG1/PG2 that aren't wired here, so the gadget
+# never reaches "attached". Drop the GPIO detection -> the sun4i USB phy assumes
+# VBUS is present -> the peripheral attaches and enumerates when plugged into a host.
+sed -i '/usb0_id_det-gpio/d; /usb0_vbus_det-gpio/d' "$SCRATCH/sc.dts"
+echo "==> DTB: removed usb0 id/vbus detect GPIOs (forces peripheral attach)"
 "$DTC" -I dts -O dtb "$SCRATCH/sc.dts" -o "$SCRATCH/sun5i-a13-olinuxino.dtb" 2>/dev/null
 
 # --- 5. Package sc.tar (layout the on-device updater expects) -----------------
