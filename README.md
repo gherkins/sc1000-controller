@@ -57,6 +57,13 @@ host/
   sc1000.midi.xml / sc1000-scripts.js  Mixxx mapping
 ```
 
+## Download (pre-built)
+
+Don't want to build it yourself? Grab the ready-to-flash firmware from the
+**[latest release](https://github.com/gherkins/sc1000-controller/releases/latest)**
+— download and unzip `sc1000-controller-firmware-v*.zip` to get `xwax` + `sc.tar`,
+then jump to [Flash](#flash). SHA-256 checksums are in the release notes.
+
 ## Build
 
 Needs Docker. From the repo root:
