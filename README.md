@@ -100,11 +100,7 @@ DAW, a VST) sees the same device.
 
 ## Credits & license
 
-Pair-programmed by [Max Girkens](https://github.com/gherkins) and
-**[Claude Code](https://claude.com/claude-code)** (Anthropic): Max did the
-hardware, flashing, testing and the decisions; Claude did the firmware
-reverse-engineering, the MIDI-output code, the Dockerised build, and the
-multi-hour hardware debugging. Noted here for transparency.
+_AI-transparency: created with Claude Opus 4.8._
 
 GPLv2 — inherited from xwax (© Mark Hills) and SC1000 (© Andrew Tait / rasteri).
 See [`COPYING`](COPYING). This is an independent add-on; the build pulls the SC1000
