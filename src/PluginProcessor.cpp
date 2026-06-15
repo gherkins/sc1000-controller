@@ -29,6 +29,17 @@ namespace
         juce::FloatVectorOperations::multiply (d, 1.0f / (float) nc, ns);
         return mono;
     }
+
+    // Peak-normalize in place to `target` (no-op if silent). Keeps loaded samples at
+    // a consistent, hot level regardless of how quiet the source file was.
+    void normalizePeak (juce::AudioBuffer<float>& buf, float target)
+    {
+        float peak = 0.0f;
+        for (int c = 0; c < buf.getNumChannels(); ++c)
+            peak = juce::jmax (peak, buf.getMagnitude (c, 0, buf.getNumSamples()));
+        if (peak > 1.0e-6f)
+            buf.applyGain (target / peak);
+    }
 }
 
 ScratchAudioProcessor::ScratchAudioProcessor()
@@ -71,6 +82,7 @@ void ScratchAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
                     controlState.addJog (delta);
                     break;
                 }
+                case 21: controlState.touched.store (v >= 64); break;               // continuous jog-touch level (firmware ≥ CC build)
                 default: break; // CC17 mirrors CC16 — ignored
             }
         }
@@ -118,6 +130,7 @@ void ScratchAudioProcessor::applyLoadedBuffer (std::shared_ptr<juce::AudioBuffer
                                                double srcRate, const juce::String& name)
 {
     buf = toMono (std::move (buf)); // mono throughout — one waveform, half the data
+    normalizePeak (*buf, 0.95f);    // consistent, hot level (source files vary in level)
 
     loadedBuffer = buf;
     loadedRate   = srcRate;

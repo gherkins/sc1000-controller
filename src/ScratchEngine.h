@@ -29,12 +29,14 @@ class ScratchEngine
 public:
     static constexpr double kPlatterSpeed = 2275.0; // jog counts per audio-second (≈ 33 rpm)
     static constexpr double kScratchTau   = 0.020;  // jog→pitch smoothing (s) — kills per-block MIDI jitter
-    static constexpr double kTouchDebounce= 0.040;  // coast window after a touch drop (s) — rides capacitive flicker
+    static constexpr double kTouchDebounce= 0.040;  // coast window after a touch drop (s) — rides flicker, then slips to motor
     static constexpr double kBrakeSpeed   = 3000.0; // firmware brakespeed — bigger = longer tape stop
     static constexpr double kSlipTau      = 0.050;  // slipmat time constant (s) — platter eases to motor
     static constexpr double kFaderOpenPt  = 0.010;  // crossfader cut: opens above this (0..1)
     static constexpr double kFaderClosePt = 0.004;  // ...closes below this (hysteresis)
     static constexpr double kFaderDecay   = 0.020;  // crossfader cut decay (s) — de-click
+    static constexpr double kVolumeGain   = 1.0;    // output level vs |pitch| (firmware VOLUME): ≥1× → full, ~0 stopped
+    static constexpr int    kJogDeadband  = 1;      // ignore isolated ±1 jog counts (encoder idle trickle)
 
     void prepare (double hostSampleRate)
     {
@@ -95,18 +97,26 @@ public:
         const double srcRate = srcRateA.load();
         const double base1x  = (double) n * srcRate / hostRate; // source samples for 1× this block
 
-        const int  counts  = cs.consumeJog();
         const bool playing = cs.playing.load (std::memory_order_relaxed);
         const bool loop    = loopOn.load (std::memory_order_relaxed);
 
+        // --- jog: ignore the isolated ±1 idle trickle the encoder emits at rest ---
+        const int rawJog = cs.consumeJog();
+        const int jog    = (std::abs (rawJog) <= kJogDeadband) ? 0 : rawJog;
+
         // --- touch with a short coast-debounce ---
-        // The capacitive sensor sends edge events (Note20 on/off) and occasionally
-        // flickers off mid-scratch. Jog movement is NOT a reliable touch proxy — the
-        // wheel coasts after release and picks up table vibration — so we don't use
-        // it. Instead, when touch drops we COAST (hold the platter speed) for a brief
-        // window: a real re-touch resumes the scratch seamlessly; if the window
-        // expires it was a genuine release and we slip to the motor (ignoring the
-        // coast + vibration, exactly as the firmware does).
+        // Jog movement is deliberately NOT used as a touch proxy: the light platter
+        // coasts (and the encoder picks up vibration) after release, so using it would
+        // let that momentum keep driving playback — the record "flies" forward/back
+        // instead of catching the motor. Instead, when touch drops we hold the platter
+        // speed for a brief window: a real re-touch resumes the scratch seamlessly; if
+        // the window expires it was a genuine release and we slip to the motor. Touch
+        // is the continuous CC21 level from the ≥CC firmware build, so it gates cleanly.
+        // KNOWN LIMITATION: the pad drops touch ~200–500 ms on *forward* pushes (PIC
+        // sensor, not fixable host-side), so the motor can briefly take back over mid-
+        // scratch. Accepted tradeoff vs the post-release coast "fly" — raising
+        // kTouchDebounce trades a longer release tail for fewer takeovers. See
+        // docs/ARCHITECTURE.md "Touch sensing — forward-push dropout".
         const bool rawTouch = cs.touched.load (std::memory_order_relaxed);
         if (rawTouch)                            { touchActive = true; touchHolding = false; }
         else if (touchActive && ! touchHolding)  { touchHolding = true; holdSamples = (int) (kTouchDebounce * hostRate); }
@@ -123,12 +133,12 @@ public:
             motorSpeed = (motorSpeed > dec) ? motorSpeed - dec : 0.0;
         }
 
-        // --- platter speed (firmware rate model): jog → target velocity, smoothed;
-        //     the playhead advances by the smoothed pitch, never by jumping position. ---
+        // --- platter speed: scratch → follow jog; brief touch drop → hold speed;
+        //     released → slip toward the motor (the coast is NOT followed). ---
         double targetPitch, tau;
         if (touchActive && ! touchHolding)        // scratching: follow the jog
         {
-            targetPitch = (base1x > 1.0e-9) ? ((double) counts / kPlatterSpeed * srcRate) / base1x : 0.0;
+            targetPitch = (base1x > 1.0e-9) ? ((double) jog / kPlatterSpeed * srcRate) / base1x : 0.0;
             tau = kScratchTau;
         }
         else if (touchHolding)                    // brief drop-out: coast (hold speed)
@@ -155,7 +165,12 @@ public:
         if (std::abs (faderTarget - faderVol) <= fStep) faderVol = faderTarget;
         else                                            faderVol += (faderTarget > faderVol) ? fStep : -fStep;
 
-        const float gain = (float) (faderVol * cs.volA.load (std::memory_order_relaxed));
+        // --- output level: crossfader cut × volume pot, scaled by |pitch| like the
+        //     firmware (VOLUME) so a stationary/creeping platter is silent (no low-
+        //     pitch drone) and the level tracks scratch speed. Computed per sample
+        //     from the instantaneous rate so it never zippers. ---
+        const double volBase = (double) faderVol * cs.volA.load (std::memory_order_relaxed);
+        const double pf      = (srcRate > 0.0) ? hostRate / srcRate : 0.0; // rate → pitch (1× units)
 
         // --- render: the rate ramps linearly across the block (continuous with
         //     the previous block) so it never steps — this is what kills the zipper. ---
@@ -170,8 +185,10 @@ public:
         for (int i = 0; i < n; ++i)
         {
             const double fi  = (double) i;
+            const double ri  = rOld + dr * fi;                        // instantaneous rate
             const double pos = pos0 + rOld * fi + 0.5 * dr * fi * fi; // ∫₀ⁱ (rOld + dr·t) dt
             const double rp  = loop ? wrap (pos, srcLen) : pos;       // wrap read pos when looping
+            const float  vg  = (float) (juce::jmin (1.0, std::abs (ri * pf) * kVolumeGain) * volBase);
             for (int ch = 0; ch < numCh; ++ch)
             {
                 const int    sc = juce::jmin (ch, srcCh - 1);
@@ -183,7 +200,7 @@ public:
                 dcX[k] = s;
                 dcY[k] = y;
 
-                out.setSample (ch, i, y * gain);
+                out.setSample (ch, i, y * vg);
             }
         }
 

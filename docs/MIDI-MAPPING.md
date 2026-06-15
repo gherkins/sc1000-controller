@@ -30,7 +30,8 @@ configurable; don't hard-filter on channel 1.
 | CC **18** (`0x12`) | Volume pot A (sample, back) | Control Change | 0–127 absolute |
 | CC **19** (`0x13`) | Volume pot B (beat, back) | Control Change | 0–127 absolute |
 | CC **20** (`0x14`) | **Jog wheel** | Control Change | **relative**, two's-complement 7-bit (see below) |
-| Note **20** (`0x14`) | **Jog touch** (capacitive) | Note-On / Note-Off | on = touched, off = released |
+| CC **21** (`0x15`) | **Jog touch level** (capacitive) | Control Change | continuous `0`/`127`, re-sent every flush (≥ CC firmware build) |
+| Note **20** (`0x14`) | **Jog touch** edge (capacitive) | Note-On / Note-Off | on = touched, off = released (kept for edge-based hosts) |
 | Note **21** (`0x15`) | Button: sample-prev (back) | Note-On / Off | vel 127 press, 0 release |
 | Note **22** (`0x16`) | Button: sample-next (back) | Note-On / Off | " |
 | Note **23** (`0x17`) | Button: beat-prev (back) | Note-On / Off | " |
@@ -63,12 +64,21 @@ int delta = (value < 64) ? value : value - 128;   // -63..+63, 0 unused
 - Rate: throttled on the device to ~1 kHz (`midioutrate`, default 1000 µs). Each
   message is the movement since the last flush.
 
-### Jog touch (Note 20)
+### Jog touch (CC 21 level + Note 20 edge)
 
-- `90 14 7F` = finger placed on the platter; `80 14 00` = lifted off.
-- Intended to gate "scratch mode" (see ARCHITECTURE.md). The device calibrates the
-  capacitive baseline at boot — unrelated to the host, but it means touch can
-  occasionally misfire; debounce/smooth on the host side if needed.
+Two representations of the same capacitive sensor:
+
+- **CC 21** — the **continuous level** (`0` released / `127` touched), re-sent **every
+  flush** (~1 kHz). Preferred: the host always has the live state, so a dropped or
+  spurious packet self-heals on the next cycle. Use this when present.
+- **Note 20** — the **edge** (`90 14 7F` placed / `80 14 00` lifted), sent only on
+  change. Kept for edge-based hosts (e.g. Mixxx). Because it's edge-only, a single
+  lost/spurious event can leave the host stuck until the next change — which is why
+  CC 21 was added.
+
+The device calibrates the capacitive baseline at boot, so touch can occasionally
+misfire; CC 21's continuous stream lets the host debounce/smooth it cleanly. The
+plugin reads CC 21 when present and falls back to the Note 20 edge otherwise.
 
 ### Buttons (Notes 21–24)
 
@@ -112,7 +122,13 @@ int delta = (value < 64) ? value : value - 128;   // -63..+63, 0 unused
   ≥2 change, plus the extremes 0/127), so CC16/18/19 are reasonably clean.
 - **Jog idle trickle.** When touched/stationary the encoder can emit occasional
   ±1 on CC20. Consider ignoring isolated ±1 deltas, or only scratching while
-  Note20 (touch) is active.
+  touch is active.
+- **Touch drops on forward pushes.** Measured: the capacitive pad loses touch for
+  ~200–500 ms during the *forward push* of a scratch (CC21 → 0 / Note20-off), while
+  holding on the backward pull. It's a real sensor-read dropout, not MIDI loss, and
+  there's no host-side fix that doesn't also reintroduce post-release coast drift —
+  see ARCHITECTURE.md "Touch sensing — forward-push dropout". The only real fix is at
+  the PIC capacitive-sensing level.
 - **Bursts.** Fast jog spins produce dense CC20 bursts (coalesced USB-MIDI
   packets). Real Core MIDI clients handle this fine; just accumulate.
 

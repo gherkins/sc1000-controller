@@ -80,6 +80,36 @@ Matching this gives the same feel as the hardware. Reverse comes for free (negat
 deltas). The audio engine resamples between the previous and new playhead each
 block; rate (and direction) = (Δplayhead / blockDuration).
 
+## Touch sensing — forward-push dropout (known hardware limitation)
+
+Measured live (via the continuous CC21 touch level — see MIDI-MAPPING.md — and a
+decoding monitor): **the capacitive pad reliably drops touch for ~200–500 ms during
+the *forward push* of a scratch, while holding solid on the backward pull.** It is
+not MIDI loss or flicker — the underlying sensor bit itself reads 0. The touch line
+is a single bit straight from the PIC (`sc_input.c`: `capIsTouched = (result >> 4 &
+0x01)`); there is **no sensitivity / threshold / hysteresis in the Linux firmware**
+to tune — that logic lives in the PIC microcontroller (separate, not in either repo).
+
+This creates an **irreducible tradeoff** for the host engine, because a 300 ms
+forward-push dropout (touch off, jog moving) is indistinguishable from a post-release
+**coast** (touch off, jog moving):
+
+- **Bridge the dropout** (jog-as-touch-proxy, a long coast window, or a firmware
+  `capIsTouched` debounce) → scratches never break, but the same bridge lets the
+  light platter's coast keep driving playback after you let go — the record "flies"
+  forward / drifts back instead of catching the motor.
+- **Don't bridge it** (gate purely on touch) → release is clean, but the motor takes
+  back over mid-scratch on the longest forward-push dropouts.
+
+No coast-window value threads the needle. **Decision: gate on touch only** (clean
+release is the priority; the jog is deliberately *not* used as a touch proxy — see
+the engine comment and git history). The `kTouchDebounce` window (40 ms) holds the
+platter *speed* through brief drops, which on a forward push roughly continues the
+push; raising it trades a longer release tail for fewer takeovers (the lever if this
+is revisited). The only real fix — making touch not drop during scratching — is at
+the **PIC capacitive sensing** level (sensitivity / hysteresis), a separate firmware
+and a bigger job. Accepted as a known limitation for now.
+
 ## Recommended stack
 
 **JUCE** (AU + Standalone, macOS first): MIDI input, real-time audio, file
