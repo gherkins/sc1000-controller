@@ -72,6 +72,10 @@ public:
     double getLengthSeconds() const noexcept { return lengthSec.load(); }
     bool hasSample()          const noexcept { return lengthSec.load() > 0.0; }
 
+    // Loop the sample at its ends (wrap) vs clamp/one-shot. Defaults to looping.
+    void setLoop (bool shouldLoop) noexcept { loopOn.store (shouldLoop, std::memory_order_relaxed); }
+    bool isLooping()        const noexcept  { return loopOn.load (std::memory_order_relaxed); }
+
     void process (juce::AudioBuffer<float>& out, ControlState& cs)
     {
         out.clear();
@@ -93,6 +97,7 @@ public:
 
         const int  counts  = cs.consumeJog();
         const bool playing = cs.playing.load (std::memory_order_relaxed);
+        const bool loop    = loopOn.load (std::memory_order_relaxed);
 
         // --- touch with a short coast-debounce ---
         // The capacitive sensor sends edge events (Note20 on/off) and occasionally
@@ -166,10 +171,12 @@ public:
         {
             const double fi  = (double) i;
             const double pos = pos0 + rOld * fi + 0.5 * dr * fi * fi; // ∫₀ⁱ (rOld + dr·t) dt
+            const double rp  = loop ? wrap (pos, srcLen) : pos;       // wrap read pos when looping
             for (int ch = 0; ch < numCh; ++ch)
             {
-                const int   sc = juce::jmin (ch, srcCh - 1);
-                const float s  = readCubic (buf->getReadPointer (sc), srcLen, pos);
+                const int    sc = juce::jmin (ch, srcCh - 1);
+                const float* d  = buf->getReadPointer (sc);
+                const float  s  = loop ? readCubicLoop (d, srcLen, rp) : readCubic (d, srcLen, rp);
 
                 const size_t k = (size_t) juce::jmin (ch, (int) dcX.size() - 1);
                 const float  y = s - dcX[k] + dcR * dcY[k]; // one-pole DC blocker
@@ -181,11 +188,36 @@ public:
         }
 
         double newPos = pos0 + (double) n * (rOld + rNew) * 0.5; // total advance = avg rate × n
-        newPos = juce::jlimit (0.0, (double) (srcLen - 1), newPos);
+        newPos = loop ? wrap (newPos, srcLen)
+                      : juce::jlimit (0.0, (double) (srcLen - 1), newPos);
         playhead.store (newPos, std::memory_order_relaxed);
     }
 
 private:
+    // Wrap a (possibly negative or out-of-range) position into [0, len) for looping.
+    static double wrap (double pos, int len)
+    {
+        if (len <= 0) return 0.0;
+        const double L = (double) len;
+        pos = std::fmod (pos, L);
+        return (pos < 0.0) ? pos + L : pos;
+    }
+
+    // Catmull-Rom cubic with wraparound indexing — interpolates seamlessly across the
+    // loop boundary (reads the start samples when near the end). pos must be in [0, len).
+    static float readCubicLoop (const float* d, int len, double pos)
+    {
+        const int   i1   = (int) pos;
+        const float frac = (float) (pos - i1);
+        auto at = [d, len] (int i) { i %= len; return d[i < 0 ? i + len : i]; };
+        const float xm1 = at (i1 - 1), x0 = at (i1), x1 = at (i1 + 1), x2 = at (i1 + 2);
+
+        const float a = -0.5f * xm1 + 1.5f * x0 - 1.5f * x1 + 0.5f * x2;
+        const float b =         xm1 - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
+        const float c = -0.5f * xm1            + 0.5f * x1;
+        return ((a * frac + b) * frac + c) * frac + x0;
+    }
+
     // Catmull-Rom cubic interpolation (4-point). Falls back to nearest at the edges.
     static float readCubic (const float* d, int len, double pos)
     {
@@ -209,6 +241,7 @@ private:
     std::atomic<double> srcRateA { 44100.0 };
     std::atomic<double> lengthSec { 0.0 };
     std::atomic<double> playhead { 0.0 };
+    std::atomic<bool>   loopOn { true }; // loop at the sample ends (vs clamp)
 
     std::shared_ptr<juce::AudioBuffer<float>> sample;
     juce::SpinLock lock;

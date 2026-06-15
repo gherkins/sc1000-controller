@@ -4,6 +4,31 @@
 namespace
 {
     constexpr int kStateMagic = 0x53435231; // 'SCR1'
+
+    // Downmix any multi-channel buffer to a single mono channel (average of the
+    // channels). Returns the buffer unchanged if it is already mono. The plugin is
+    // mono end-to-end: one waveform, half the data, and the engine fans the single
+    // channel out to the stereo bus on playback.
+    std::shared_ptr<juce::AudioBuffer<float>> toMono (std::shared_ptr<juce::AudioBuffer<float>> buf)
+    {
+        if (buf == nullptr || buf->getNumChannels() <= 1)
+            return buf;
+
+        const int nc = buf->getNumChannels();
+        const int ns = buf->getNumSamples();
+        auto mono = std::make_shared<juce::AudioBuffer<float>> (1, ns);
+        mono->clear();
+
+        auto* d = mono->getWritePointer (0);
+        for (int c = 0; c < nc; ++c)
+        {
+            const auto* s = buf->getReadPointer (c);
+            for (int i = 0; i < ns; ++i)
+                d[i] += s[i];
+        }
+        juce::FloatVectorOperations::multiply (d, 1.0f / (float) nc, ns);
+        return mono;
+    }
 }
 
 ScratchAudioProcessor::ScratchAudioProcessor()
@@ -92,6 +117,8 @@ bool ScratchAudioProcessor::loadFile (const juce::File& file)
 void ScratchAudioProcessor::applyLoadedBuffer (std::shared_ptr<juce::AudioBuffer<float>> buf,
                                                double srcRate, const juce::String& name)
 {
+    buf = toMono (std::move (buf)); // mono throughout — one waveform, half the data
+
     loadedBuffer = buf;
     loadedRate   = srcRate;
     sampleName   = name;
@@ -110,7 +137,7 @@ void ScratchAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::MemoryOutputStream os (destData, false);
     os.writeInt (kStateMagic);
-    os.writeInt (1); // version
+    os.writeInt (2); // version 2: sample stored as FLAC (v1 was raw float PCM)
 
     auto buf = loadedBuffer;
     if (buf == nullptr)
@@ -122,10 +149,27 @@ void ScratchAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     os.writeInt (1); // has sample
     os.writeString (sampleName);
     os.writeDouble (loadedRate);
-    os.writeInt (buf->getNumChannels());
-    os.writeInt (buf->getNumSamples());
-    for (int c = 0; c < buf->getNumChannels(); ++c)
-        os.write (buf->getReadPointer (c), sizeof (float) * (size_t) buf->getNumSamples());
+
+    // Encode the sample as FLAC — lossless (to 24-bit, transparent) and far smaller
+    // than raw float PCM inside the .xrns. It is decoded back to a plain PCM buffer
+    // once on load; the audio thread never touches FLAC, so realtime scratching is
+    // identical regardless of how the sample was stored.
+    juce::MemoryBlock flacBlock;
+    {
+        juce::FlacAudioFormat flac;
+        auto mos = std::make_unique<juce::MemoryOutputStream> (flacBlock, false);
+        if (auto* writer = flac.createWriterFor (mos.get(), loadedRate,
+                                                 (unsigned int) buf->getNumChannels(),
+                                                 24, {}, 0))
+        {
+            mos.release(); // writer owns the stream now
+            writer->writeFromAudioSampleBuffer (*buf, 0, buf->getNumSamples());
+            delete writer; // flushes + finalizes the FLAC stream into flacBlock
+        }
+    }
+
+    os.writeInt64 ((juce::int64) flacBlock.getSize());
+    os.write (flacBlock.getData(), flacBlock.getSize());
 }
 
 void ScratchAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
@@ -133,20 +177,50 @@ void ScratchAudioProcessor::setStateInformation (const void* data, int sizeInByt
     juce::MemoryInputStream is (data, (size_t) sizeInBytes, false);
     if (is.readInt() != kStateMagic)
         return;
-    is.readInt(); // version
+    const int version = is.readInt();
     if (is.readInt() == 0)
         return; // no sample stored
 
     const juce::String name = is.readString();
     const double rate = is.readDouble();
-    const int ch = is.readInt();
-    const int ns = is.readInt();
-    if (ch <= 0 || ns <= 0)
-        return;
 
-    auto buf = std::make_shared<juce::AudioBuffer<float>> (ch, ns);
-    for (int c = 0; c < ch; ++c)
-        is.read (buf->getWritePointer (c), (int) (sizeof (float) * (size_t) ns));
+    std::shared_ptr<juce::AudioBuffer<float>> buf;
+
+    if (version >= 2) // FLAC blob
+    {
+        const juce::int64 flacSize = is.readInt64();
+        if (flacSize <= 0)
+            return;
+
+        juce::MemoryBlock flacBlock;
+        flacBlock.setSize ((size_t) flacSize);
+        is.read (flacBlock.getData(), (int) flacSize);
+
+        juce::FlacAudioFormat flac;
+        std::unique_ptr<juce::AudioFormatReader> reader (
+            flac.createReaderFor (new juce::MemoryInputStream (flacBlock, false), true));
+        if (reader == nullptr)
+            return;
+
+        const int ch = (int) reader->numChannels;
+        const int ns = (int) reader->lengthInSamples;
+        if (ch <= 0 || ns <= 0)
+            return;
+
+        buf = std::make_shared<juce::AudioBuffer<float>> (ch, ns);
+        reader->read (buf.get(), 0, ns, 0, true, true);
+    }
+    else // version 1: raw float PCM (legacy)
+    {
+        const int ch = is.readInt();
+        const int ns = is.readInt();
+        if (ch <= 0 || ns <= 0)
+            return;
+
+        buf = std::make_shared<juce::AudioBuffer<float>> (ch, ns);
+        for (int c = 0; c < ch; ++c)
+            is.read (buf->getWritePointer (c), (int) (sizeof (float) * (size_t) ns));
+    }
 
     applyLoadedBuffer (std::move (buf), rate, name);
 }

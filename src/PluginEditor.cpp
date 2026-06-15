@@ -4,7 +4,7 @@ ScratchAudioProcessorEditor::ScratchAudioProcessorEditor (ScratchAudioProcessor&
     : juce::AudioProcessorEditor (&p),
       processor (p),
       waveform (p),
-      platter (p)
+      deck (p)
 {
     setLookAndFeel (&lnf);
 
@@ -16,7 +16,7 @@ ScratchAudioProcessorEditor::ScratchAudioProcessorEditor (ScratchAudioProcessor&
     addAndMakeVisible (headerLabel);
 
     addAndMakeVisible (waveform);
-    addAndMakeVisible (platter);
+    addAndMakeVisible (deck);
 
     loadButton.onClick = [this] { openFileChooser(); };
     addAndMakeVisible (loadButton);
@@ -24,7 +24,7 @@ ScratchAudioProcessorEditor::ScratchAudioProcessorEditor (ScratchAudioProcessor&
     infoLabel.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (infoLabel);
 
-    setSize (560, 470);
+    setSize (420, 670); // sized so the deck draws the device body (W:H 0.772) at full width
     startTimerHz (30);
 }
 
@@ -51,23 +51,23 @@ void ScratchAudioProcessorEditor::resized()
     headerLabel.setBounds (headerBounds);
 
     auto r = area.reduced (10);
-    waveform.setBounds (r.removeFromTop (130));
-    r.removeFromTop (10);
 
-    auto bottom = r.removeFromBottom (30);
-    loadButton.setBounds (bottom.removeFromLeft (120));
-    bottom.removeFromLeft (10);
+    waveform.setBounds (r.removeFromTop (64));
+    r.removeFromTop (8);
+
+    auto bottom = r.removeFromBottom (28);
+    loadButton.setBounds (bottom.removeFromLeft (110));
+    bottom.removeFromLeft (8);
     infoLabel.setBounds (bottom);
-    r.removeFromBottom (10);
+    r.removeFromBottom (8);
 
-    const int sz = juce::jmin (r.getWidth(), r.getHeight());
-    platter.setBounds (r.withSizeKeepingCentre (sz, sz));
+    deck.setBounds (r); // device body: platter + CUE pads + crossfader, by exact proportions
 }
 
 void ScratchAudioProcessorEditor::timerCallback()
 {
     waveform.repaint();
-    platter.repaint();
+    deck.repaint();
 
     auto& cs = processor.getControlState();
     juce::String info;

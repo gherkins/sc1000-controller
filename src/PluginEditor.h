@@ -59,22 +59,60 @@ private:
     ScratchAudioProcessor& proc;
 };
 
-// Virtual turntable with an orange DJ marker. Rotation follows the playhead, so it
-// spins forward/back exactly as you scrub.
-class PlatterDisplay : public juce::Component
+// The deck face — a 1:1 scale model of the SC1000's front, reproduced from photo
+// measurements so the proportions, pad sizes and fader head match the hardware.
+// Everything is positioned as a fraction of the device body (measured W:H = 0.772),
+// which is letterboxed inside this component. Same dark Renoise palette — only the
+// geometry mirrors the device:
+//   • big central jog platter (orange DJ marker spins with the playhead)
+//   • four CUE pads in the corners (CUE 3/4 top, CUE 1/2 bottom)
+//   • horizontal crossfader at the bottom with the tall protruding fader head
+class DeckFace : public juce::Component
 {
 public:
-    explicit PlatterDisplay (ScratchAudioProcessor& p) : proc (p) {}
+    explicit DeckFace (ScratchAudioProcessor& p) : proc (p) {}
+
+    // --- device geometry, as fractions of the body (from the product photo) ---
+    static constexpr float kBodyRatio  = 0.772f; // body width / height
+    static constexpr float kPlatterCx  = 0.500f; // platter centre x
+    static constexpr float kPlatterCy  = 0.395f; // platter centre y
+    static constexpr float kPlatterDia = 0.930f; // platter diameter / body width
+    static constexpr float kPadSize    = 0.092f; // pad side / body width
+    static constexpr float kPadLeftX   = 0.0676f, kPadRightX = 0.8637f; // pad left edges
+    static constexpr float kPadTopY    = 0.0214f, kPadBotY   = 0.6938f; // pad top edges
+    static constexpr float kFaderCy    = 0.892f; // crossfader centre y
+    static constexpr float kFaderTrack = 0.451f; // track width / body width
+    static constexpr float kHeadW      = 0.092f; // fader head width / body width
+    static constexpr float kHeadH      = 0.119f; // fader head height / body height
 
     void paint (juce::Graphics& g) override
     {
-        auto b = getLocalBounds().toFloat().reduced (6.0f);
-        const float d  = juce::jmin (b.getWidth(), b.getHeight());
-        const float cx = b.getCentreX();
-        const float cy = b.getCentreY();
-        const float r  = d * 0.5f;
+        // fit the device body (kBodyRatio) inside our bounds, centered
+        auto area = getLocalBounds().toFloat();
+        float bw = area.getWidth();
+        float bh = bw / kBodyRatio;
+        if (bh > area.getHeight()) { bh = area.getHeight(); bw = bh * kBodyRatio; }
+        const float bx = area.getCentreX() - bw * 0.5f;
+        const float by = area.getCentreY() - bh * 0.5f;
 
-        // vinyl body — subtle radial gradient
+        auto fx = [&] (float f) { return bx + f * bw; };
+        auto fy = [&] (float f) { return by + f * bh; };
+
+        drawPlatter (g, fx (kPlatterCx), fy (kPlatterCy), kPlatterDia * bw * 0.5f);
+
+        const float cs = kPadSize * bw;
+        drawCue (g, fx (kPadLeftX),  fy (kPadTopY), cs, "CUE 3");
+        drawCue (g, fx (kPadRightX), fy (kPadTopY), cs, "CUE 4");
+        drawCue (g, fx (kPadLeftX),  fy (kPadBotY), cs, "CUE 1");
+        drawCue (g, fx (kPadRightX), fy (kPadBotY), cs, "CUE 2");
+
+        drawCrossfader (g, bx, by, bw, bh);
+    }
+
+private:
+    void drawPlatter (juce::Graphics& g, float cx, float cy, float r)
+    {
+        const float d = r * 2.0f;
         juce::ColourGradient grad (juce::Colour (0xff2a2a2a), cx, cy,
                                    juce::Colour (0xff141414), cx, cy - r, true);
         g.setGradientFill (grad);
@@ -87,7 +125,7 @@ public:
         g.setColour (renoise::edgeLight.withAlpha (0.4f)); // rim
         g.drawEllipse (cx - r, cy - r, d, d, 1.5f);
 
-        const float lr = r * 0.32f;                        // centre label — fills orange while playing
+        const float lr = r * 0.30f;                        // centre label — fills orange while playing
         const bool playing = proc.getControlState().playing.load();
         g.setColour (playing ? renoise::accent : juce::Colour (0xff181818));
         g.fillEllipse (cx - lr, cy - lr, lr * 2.0f, lr * 2.0f);
@@ -119,7 +157,61 @@ public:
         }
     }
 
-private:
+    void drawCue (juce::Graphics& g, float x, float y, float s, const juce::String& label)
+    {
+        juce::Rectangle<float> sq (x, y, s, s);
+        g.setGradientFill (juce::ColourGradient (renoise::buttonTop, sq.getX(), sq.getY(),
+                                                 renoise::buttonBot, sq.getX(), sq.getBottom(), false));
+        g.fillRoundedRectangle (sq, 3.0f);
+        g.setColour (renoise::accent.withAlpha (0.16f));    // faint lit centre
+        g.fillRoundedRectangle (sq.reduced (s * 0.16f), 2.0f);
+        g.setColour (renoise::accent);
+        g.drawRoundedRectangle (sq, 3.0f, 1.5f);
+
+        g.setColour (renoise::text);                        // label below the pad
+        g.setFont (juce::Font (juce::FontOptions (juce::jlimit (8.0f, 12.0f, s * 0.30f), juce::Font::bold)));
+        const float lw = juce::jmax (s, 44.0f);
+        const juce::Rectangle<float> lr (sq.getCentreX() - lw * 0.5f, sq.getBottom() + 2.0f, lw, 13.0f);
+        g.drawText (label, lr, juce::Justification::centred);
+    }
+
+    // Crossfader: thin sunken slot + a tall head that protrudes above/below it (as
+    // on the device). Shows CC16 live; the engine treats it as a hysteresis CUT
+    // (silent only at the far-left edge), so the head is orange while audio passes
+    // and dims to grey at the cut.
+    void drawCrossfader (juce::Graphics& g, float bx, float by, float bw, float bh)
+    {
+        const float trackW = kFaderTrack * bw;
+        const float tx     = bx + bw * 0.5f - trackW * 0.5f;
+        const float ty     = by + kFaderCy * bh;
+        const float slotH  = juce::jmax (6.0f, 0.022f * bh);
+
+        juce::Rectangle<float> slot (tx, ty - slotH * 0.5f, trackW, slotH);
+        g.setColour (renoise::inset);
+        g.fillRoundedRectangle (slot, 3.0f);
+        g.setColour (renoise::border);
+        g.drawRoundedRectangle (slot, 3.0f, 1.0f);
+
+        const float v       = juce::jlimit (0.0f, 1.0f, proc.getControlState().crossfader.load());
+        const bool  passing = v > 0.01f;
+
+        const float headW  = kHeadW * bw;
+        const float headH  = kHeadH * bh;
+        const float travel = trackW - headW;
+        juce::Rectangle<float> head (tx + travel * v, ty - headH * 0.5f, headW, headH);
+
+        const juce::Colour top = passing ? renoise::accent    : renoise::buttonTop;
+        const juce::Colour bot = passing ? renoise::accentDim : renoise::buttonBot;
+        g.setGradientFill (juce::ColourGradient (top, head.getX(), head.getY(),
+                                                 bot, head.getX(), head.getBottom(), false));
+        g.fillRoundedRectangle (head, 3.0f);
+        g.setColour (renoise::border);
+        g.drawRoundedRectangle (head, 3.0f, 1.0f);
+
+        g.setColour (renoise::border.withAlpha (0.6f));     // centre grip line
+        g.drawLine (head.getCentreX(), head.getY() + 4.0f, head.getCentreX(), head.getBottom() - 4.0f, 1.5f);
+    }
+
     ScratchAudioProcessor& proc;
 };
 
@@ -146,7 +238,7 @@ private:
 
     juce::Label      headerLabel;
     WaveformDisplay  waveform;
-    PlatterDisplay   platter;
+    DeckFace         deck;
     juce::TextButton loadButton { "Load sample" };
     juce::Label      infoLabel;
     std::unique_ptr<juce::FileChooser> chooser;

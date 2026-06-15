@@ -18,9 +18,10 @@ marked with the provisional answer the MVP ships.
   platter slips back to the motor** (slipmat inertia, `kSlipTau`); **playing →
   spins at 1×**; **stop → motor brakes 1×→0 over ~0.6 s = tape stop** (`kBrakeSpeed`).
   Transport toggled by the cue / Start buttons. A DC blocker keeps a stationary
-  platter silent + de-clicks. Idle-trickle ±1 suppressed. Ends **clamp** (open q10).
-  One voice. *(Note: scratch is now touch-gated — jog without touch is treated as
-  coast, handled by the slip model.)*
+  platter silent + de-clicks. Idle-trickle ±1 suppressed. Ends **loop** (wrap both
+  directions, seamless cubic across the boundary — q10 decided; toggle via
+  `ScratchEngine::setLoop`, default on). One voice. *(Note: scratch is now
+  touch-gated — jog without touch is treated as coast, handled by the slip model.)*
 - **Crossfader** (open q4, decided) = firmware-ported **hysteresis CUT** — sharp
   on/off at the closed edge + ~20 ms de-click, *not* a linear fade; the **volume
   pot CC18** sets the level. Side benefit: immune to the CC16 idle-drift. volB
@@ -31,7 +32,7 @@ marked with the provisional answer the MVP ships.
   drag-and-drop + file-open loading.
 
 **Not yet done / next:** more hardware tuning of the feel; Shift-layer actions +
-back/cue button assignments beyond transport; loop mode; latency tuning. Tuning
+back/cue button assignments beyond transport; latency tuning. Tuning
 knobs (all in `ScratchEngine.h`): `kPlatterSpeed` (scrub speed), `kBrakeSpeed`
 (tape-stop length), `kSlipTau` (slipmat catch-up), `kFaderOpenPt`/`kFaderClosePt`
 (cut point), `kFaderDecay` (cut de-click), and the jog direction (CC20 sign).
@@ -118,6 +119,13 @@ in the plugin state.** The sample then travels with the song, reproducing
 Renoise's self-contained `.xrns` feel even though the audio lives inside the
 plugin rather than the native sampler.
 
+The embedded audio is stored as **FLAC** (state version 2 — lossless to 24-bit,
+~5× smaller than raw float PCM; v1 raw-PCM states still load). It is encoded only
+on save and decoded once on load into the in-RAM PCM buffer the engine reads, so
+realtime scratching is unaffected. The drag limitation (below) only concerns the
+*initial* load gesture — once loaded by any means, the sample is bundled in the
+song, so dragging *from* Renoise is never required (see the Renoise drag note).
+
 > Caveat on the sample editor: Renoise's native sample editor only edits *native*
 > samples, not one living inside a plugin. Workflow: prep/chop in Renoise's editor
 > → drag into the plugin, which then owns + bundles it. The plugin needs its own
@@ -171,14 +179,19 @@ guarantees true scratch feel.
 7. **Sample slots** — single sample, or multiple banks/slots switchable by buttons?
 8. **Loading** — drag-and-drop only, file browser, both? Formats (wav/aiff/mp3/flac)?
 9. **Cue points / loops** — in scope for MVP, or later?
-10. **Loop the sample** at its ends, or one-shot / clamp at boundaries?
+10. ~~**Loop the sample** at its ends, or one-shot / clamp at boundaries?~~
+    **DECIDED: loop** — the playhead wraps in both directions with cubic
+    interpolation across the boundary (`ScratchEngine::wrap`/`readCubicLoop`).
+    Toggleable via `setLoop`, default on. One-shot/clamp remains the `loop=false` path.
 
 ### Engine & I/O
 11. **Latency budget** — scratch wants low latency (≈ <10 ms jog→audio). Buffer
     size limits? (Device MIDI is throttled to ~1 kHz; jog deltas accumulate.)
 12. **Jog smoothing** — ignore isolated ±1 deltas / idle trickle, or pass raw?
-13. **Audio** — stereo throughout (sample is stereo). Sample-rate handling
-    (resample sample to host rate on load).
+13. **Audio** — **mono internally** (decided): samples are downmixed to one
+    channel on import (`toMono` in `PluginProcessor.cpp`), stored/displayed mono,
+    and fanned out to the stereo bus on playback. One waveform, half the data.
+    Sample-rate handling: the engine resamples to host rate at playback time.
 14. **MIDI device selection** — auto-bind to "MIDI Gadget", or user-pick? Handle
     hot-plug/reconnect (the SC1000 powers from USB, so it can come and go).
 
