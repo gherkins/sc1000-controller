@@ -10,7 +10,8 @@ the **MIDI Gadget** USB device. Set in `scsettings.txt` on the stick.
 | Sample volume pot      | back     | PIC ADC POT1 `ADCs[2]`     | **CC 18** (0–127)   | ✅     |
 | Beat volume pot        | back     | PIC ADC POT2 `ADCs[3]`     | **CC 19** (0–127)   | ✅     |
 | **Jog wheel** rotation | top      | AS5601 encoder             | **CC 20** relative¹ | ✅ MVP |
-| Jog touch              | top      | capacitive (PIC bit 4)     | **Note 20** on/off  | ✅     |
+| Jog touch (level)      | top      | capacitive (PIC bit 4)     | **CC 21** 0/127 cont.⁴ | ✅     |
+| Jog touch (edge)       | top      | capacitive (PIC bit 4)     | **Note 20** on/off  | ✅     |
 | Sample prev / next     | back     | PIC `buttons[0]` / `[1]`   | **Note 21 / 22**    | ✅ (added) |
 | Beat prev / next       | back     | PIC `buttons[2]` / `[3]`   | **Note 23 / 24**    | ✅ (added) |
 | Shift button           | front    | IOevent `ACTION_SHIFTON/OFF` | **Note 25** on/off² | ✅ (added) |
@@ -31,6 +32,12 @@ cue button's note is `32 + <expander pin>`, so the four corners land on four
 — see below). Pressing a cue **while Shift is held** fires the firmware's
 *delete-cue* action on the same pin, which emits the **same** note; the host
 distinguishes "set" vs "delete" from the separately-reported Shift state.
+
+⁴ **Jog touch** is emitted two ways: **CC 21** carries the continuous level
+(`0`/`127`) re-sent every flush, so the host always has the live state and a dropped
+or spurious packet self-heals next cycle — prefer this. **Note 20** still sends the
+on/off edge for edge-based hosts (Mixxx). The edge alone can leave a host stuck if an
+event is lost, which is why the continuous CC was added.
 
 ## Scope
 

@@ -11,7 +11,8 @@
  *   CC 18  volume pot 1         (0..127)
  *   CC 19  volume pot 2         (0..127)
  *   CC 20    jog, relative two's-complement 7-bit (1..63 fwd, 127..65 rev)
- *   Note 20  jog touch (note-on touched, note-off released)
+ *   CC 21    jog touch level, continuous 0/127 - re-sent every flush, robust to dropped edges
+ *   Note 20  jog touch edge (note-on touched / note-off released) - kept for edge-based hosts
  *   Note 21-24  buttons (PIC: sample/beat prev/next) - map any to start/stop etc.
  *   Note 25  Shift (front)        on while held, off on release
  *   Note 26/27  Start/Stop (front) momentary tap (deck 0 / deck 1)
@@ -39,6 +40,7 @@
 #define CC_VOLUME1    18
 #define CC_VOLUME2    19
 #define CC_JOG        20
+#define CC_JOGTOUCH   21 /* continuous jog-touch level (0/127), re-sent every flush */
 #define NOTE_JOGTOUCH 20
 #define NOTE_BUTTON0  21 /* PIC buttons 0..3 -> notes 21..24 */
 
@@ -250,7 +252,10 @@ void sc_midi_out_update(int encoderAngle, unsigned int adc0, unsigned int adc1,
 	send_cc(CC_VOLUME1, adc2 >> 3, &prevV1, 2);
 	send_cc(CC_VOLUME2, adc3 >> 3, &prevV2, 2);
 
-	/* Jog touch: note on/off */
+	/* Jog touch: continuous level CC, re-sent every flush so a dropped or spurious
+	   packet self-heals on the next cycle - the host reads the live level, not edges.
+	   Keep the Note 20 on/off edge too, for edge-based hosts (e.g. Mixxx). */
+	send3(0xB0 | ch, CC_JOGTOUCH, touched ? 127 : 0);
 	int tnow = touched ? 1 : 0;
 	if (tnow != prevTouched)
 	{
