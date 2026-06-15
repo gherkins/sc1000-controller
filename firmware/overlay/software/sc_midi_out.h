@@ -24,6 +24,20 @@
 int sc_midi_out_init(void);
 
 /*
+ * Emit a MIDI message for a physical IO button as it is actioned by the
+ * firmware. Called from IOevent() (sc_midimap.c) for every IO/MIDI mapping;
+ * this function itself filters to the IO buttons we expose (the 4 top-panel
+ * cue buttons, the front Shift button and the front Start/Stop button) and
+ * ignores everything else. Hooking the action path (rather than raw GPIO pins)
+ * means we inherit the firmware's debounce + shift handling and don't need to
+ * know the MK2's exact pin wiring.
+ *
+ * Safe to call before the gadget is up (does nothing until output is ready).
+ */
+struct mapping; /* defined in sc_midimap.h */
+void sc_midi_out_io_event(const struct mapping *map);
+
+/*
  * Called from the input thread once per loop. Sends crossfader/volume as CC,
  * jog rotation as relative CC, and jog touch as note on/off - throttled to
  * scsettings.midioutrate microseconds and only when values change.

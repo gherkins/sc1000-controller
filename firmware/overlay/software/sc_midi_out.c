@@ -13,6 +13,9 @@
  *   CC 20    jog, relative two's-complement 7-bit (1..63 fwd, 127..65 rev)
  *   Note 20  jog touch (note-on touched, note-off released)
  *   Note 21-24  buttons (PIC: sample/beat prev/next) - map any to start/stop etc.
+ *   Note 25  Shift (front)        on while held, off on release
+ *   Note 26/27  Start/Stop (front) momentary tap (deck 0 / deck 1)
+ *   Note 32+  cue buttons (top)    momentary tap, NOTE_CUE_BASE + expander pin
  *
  * This is an SC1000-specific addition (not part of upstream xwax).
  */
@@ -27,6 +30,7 @@
 
 #include "midi.h"
 #include "xwax.h"
+#include "sc_midimap.h"
 #include "sc_midi_out.h"
 
 /* MIDI assignments (status nibble | channel applied at send time) */
@@ -37,6 +41,11 @@
 #define CC_JOG        20
 #define NOTE_JOGTOUCH 20
 #define NOTE_BUTTON0  21 /* PIC buttons 0..3 -> notes 21..24 */
+
+/* IO buttons (read via process_io / IOevent, not the PIC) */
+#define NOTE_SHIFT       25 /* front Shift: on while held, off on release */
+#define NOTE_STARTSTOP   26 /* front Start/Stop: +DeckNo -> 26 (CH0) / 27 (CH1) */
+#define NOTE_CUE_BASE    32 /* top cue buttons: NOTE_CUE_BASE + expander pin */
 
 /* the 4 PIC buttons (back panel: sample/beat prev/next), read in sc_input.c */
 extern unsigned char buttons[4];
@@ -159,6 +168,45 @@ static void send_cc(int cc, int val7, int *prev, int deadband)
 		send3(0xB0 | (scsettings.midioutchannel & 0x0F),
 			  (unsigned char)cc, (unsigned char)val7);
 		*prev = val7;
+	}
+}
+
+/*
+ * Hook from IOevent(): a physical IO button has just been actioned. We expose
+ * the front/top buttons the PIC doesn't carry - the 4 cue buttons, Shift and
+ * Start/Stop - as MIDI. Other actions (file/folder nav, volume, etc.) and
+ * MIDI-driven maps are ignored so we never echo host MIDI back out.
+ *
+ * Cue and Start/Stop only get a press edge from the firmware (no release), so
+ * they go out as a momentary note tap (on then off). Shift toggles a held note
+ * (on at SHIFTON, off at SHIFTOFF) so the host can read the shift state.
+ */
+void sc_midi_out_io_event(const struct mapping *map)
+{
+	if (disabled || !ready || map == NULL || map->Type != MAP_IO)
+		return;
+
+	unsigned char ch = scsettings.midioutchannel & 0x0F;
+
+	switch (map->Action)
+	{
+	case ACTION_CUE:
+	case ACTION_DELETECUE: /* same physical pad, shifted; host reads Shift note */
+		send3(0x90 | ch, NOTE_CUE_BASE + map->Pin, 127);
+		send3(0x80 | ch, NOTE_CUE_BASE + map->Pin, 0);
+		break;
+	case ACTION_STARTSTOP:
+		send3(0x90 | ch, NOTE_STARTSTOP + (map->DeckNo & 0x01), 127);
+		send3(0x80 | ch, NOTE_STARTSTOP + (map->DeckNo & 0x01), 0);
+		break;
+	case ACTION_SHIFTON:
+		send3(0x90 | ch, NOTE_SHIFT, 127);
+		break;
+	case ACTION_SHIFTOFF:
+		send3(0x80 | ch, NOTE_SHIFT, 0);
+		break;
+	default:
+		break;
 	}
 }
 

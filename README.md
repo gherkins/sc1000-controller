@@ -30,6 +30,9 @@ All on MIDI channel 1 (configurable via `midioutchannel`). Full reference:
 | Jog wheel | CC 20, relative (two's-complement: `01..3F` fwd, `7F..41` rev) |
 | Jog touch | Note 20 on/off |
 | Back buttons (sample/beat prev/next) | Notes 21–24 |
+| Shift (front) | Note 25 on/off (held) |
+| Start/Stop (front) | Note 26 / 27 (momentary tap) |
+| Cue buttons ×4 (top) | Notes 32–47 (momentary tap, one note per pin) |
 
 ## How it works
 

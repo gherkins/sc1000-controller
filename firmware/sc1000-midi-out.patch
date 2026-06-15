@@ -95,3 +95,24 @@ index 230cbd7..0d81f87 100644
      bool midiRemapped;
      bool ioRemapped;
  
+diff --git a/software/sc_midimap.c b/software/sc_midimap.c
+--- a/software/sc_midimap.c
++++ b/software/sc_midimap.c
+@@ -5,7 +5,8 @@
+ #include <stdbool.h>
+ #include <stdlib.h>
+ #include "sc_midimap.h"
+ #include "xwax.h"
++#include "sc_midi_out.h"
+ 
+ /*
+ void add_IO_mapping(struct mapping **maps, unsigned char Pin, bool Pullup, bool Edge, unsigned char DeckNo, unsigned char Action, unsigned char Param)
+@@ -85,6 +85,8 @@ void IOevent(struct mapping *map, unsigned char MidiBuffer[3])
+ 
+ 	if (map != NULL)
+ 	{
++		// Mirror physical button presses out as USB-MIDI (cue/shift/startstop)
++		sc_midi_out_io_event(map);
+ 		//printf("Map notnull type:%d deck:%d po:%d edge:%d pin:%d action:%d param:%d\n", map->Type, map->DeckNo, map->port, map->Edge, map->Pin, map->Action, map->Param);
+ 		//dump_maps();
+ 		if (map->Action == ACTION_CUE)
