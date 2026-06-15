@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(ScratchVST VERSION 0.1.0 LANGUAGES C CXX)
+project(SC1000 VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,10 +20,10 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(JUCE)
 
-juce_add_plugin(ScratchVST
-  PRODUCT_NAME              "Scratch VST"
-  COMPANY_NAME             "scratch-vst"
-  BUNDLE_ID                "com.scratchvst.scratchvst"
+juce_add_plugin(SC1000
+  PRODUCT_NAME              "SC1000"
+  COMPANY_NAME             "gherkins"
+  BUNDLE_ID                "com.gherkins.sc1000"
   PLUGIN_MANUFACTURER_CODE  Scvt
   PLUGIN_CODE               Scr1
   FORMATS                   AU Standalone
@@ -36,12 +36,12 @@ juce_add_plugin(ScratchVST
   COPY_PLUGIN_AFTER_BUILD   TRUE          # installs the .component to ~/Library/Audio/Plug-Ins/Components
 )
 
-target_sources(ScratchVST PRIVATE
+target_sources(SC1000 PRIVATE
   src/PluginProcessor.cpp
   src/PluginEditor.cpp
 )
 
-target_compile_definitions(ScratchVST PUBLIC
+target_compile_definitions(SC1000 PUBLIC
   JUCE_WEB_BROWSER=0
   JUCE_USE_CURL=0
   JUCE_USE_MP3AUDIOFORMAT=1
@@ -50,7 +50,7 @@ target_compile_definitions(ScratchVST PUBLIC
   JUCE_VST3_CAN_REPLACE_VST2=0
 )
 
-target_link_libraries(ScratchVST
+target_link_libraries(SC1000
   PRIVATE
     juce::juce_audio_utils
   PUBLIC

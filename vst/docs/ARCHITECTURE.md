@@ -161,6 +161,26 @@ song, so dragging *from* Renoise is never required (see the Renoise drag note).
 > → drag into the plugin, which then owns + bundles it. The plugin needs its own
 > minimal waveform view anyway (it's a headline feature the hardware lacks).
 
+## USB-MIDI device name — "MIDI Gadget" (rename to "SC1000" deferred)
+
+macOS shows the controller as **"MIDI Gadget"**, not "SC1000": the firmware uses
+the legacy `g_midi` USB gadget, whose USB **product string is compiled into the
+kernel** (`drivers/usb/gadget/legacy/gmidi.c`, `"MIDI Gadget"`) — it is not a
+runtime setting. Renaming it is therefore a *firmware* change, not a plugin one.
+The plugin binds by matching "gadget"/"f_midi" in the ALSA hints
+(`firmware/overlay/software/sc_midi_out.c`, `open_gadget()`), so the name is
+cosmetic to the plugin either way.
+
+**How to do it (deferred — needs a rebuild + reflash + hardware retest):** patch
+the product (and manufacturer) string in the kernel's `gmidi.c` to "SC1000", wired
+through buildroot the same way `build/build.sh` already patches the device tree and
+`.config` (a kernel patch in a buildroot global patch dir, or a post-extract
+`sed`). A cleaner-but-bigger alternative is the configfs/libcomposite route the
+kernel fragment already anticipates (`build/kernel-gadget.fragment`, the commented
+`CONFIG_USB_CONFIGFS*` lines), which sets the gadget strings from userspace at
+boot. Deferred because it can only be confirmed on hardware — best done alongside
+the first real hardware test of the whole controller→plugin chain.
+
 ## Before building: sanity-check the off-the-shelf option
 
 One existing plugin gets close: **Scratch Track** (Stagecraft, ~$100, AU + native
@@ -236,4 +256,8 @@ guarantees true scratch feel.
 
 ### Project
 18. **License** — GPLv2-compatible (controller side is GPLv2)? Confirm before release.
-19. **Name** — keep `scratch-vst`?
+19. ~~**Name** — keep `scratch-vst`?~~ **DECIDED: the plugin is "SC1000"**
+    (`PRODUCT_NAME` / `getName` / the on-screen header), folded into the public
+    `gherkins/sc1000-controller` repo under `vst/`. The internal AU codes stay
+    `aumu Scr1 Scvt` and the FLAC state magic stays `'SCR1'` — invisible, no reason
+    to churn. The repo keeps its established public name.

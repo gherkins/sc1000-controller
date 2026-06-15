@@ -9,5 +9,13 @@ build/SC1000/
 *.o
 *.d
 
+# plugin build output (JUCE FetchContent; also covered by vst/.gitignore)
+vst/build/
+
+# local Claude Code instructions — stays local, not committed
+/CLAUDE.md
+
 # macOS
 .DS_Store
+
+# dist/ is intentionally tracked (rolling *-latest artifacts linked in the README)

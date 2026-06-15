@@ -1,117 +1,100 @@
-# sc1000-controller
+# SC1000
 
-Firmware add-on that turns an **[SC1000](https://github.com/rasteri/SC1000)**
-portable digital scratch instrument into a **USB-MIDI controller**: the jog wheel,
-crossfader, volume pots and buttons stream as MIDI over the micro-USB port. No
-soldering — one USB cable to a computer provides power *and* MIDI, and the unit
-appears as a Core MIDI device named **`MIDI Gadget`**.
+**Drop in a sample and scratch it like vinyl** — spin the platter, cut it with the
+crossfader, watch the waveform and playhead move. A macOS scratch instrument, plus
+the firmware that turns a real [SC1000](https://github.com/rasteri/SC1000) into the
+USB-MIDI controller that drives it.
 
-It builds on the SC1000 firmware (a fork of [xwax](https://xwax.org)), which can
-*receive* MIDI but not send it; this adds the MIDI output. Verified on an SC1000 MK2.
+<p align="center">
+  <img src="docs/screenshot.png" alt="The SC1000 plugin — spinning platter, waveform and playhead, crossfader and cue pads" width="380">
+</p>
 
-> ⚠️ **Disclaimer — use entirely at your own risk.** This is experimental,
-> unofficial firmware. It rebuilds and flashes your device's kernel, device tree
-> and boot partition, and it can **brick, damage, or "fry" your SC1000 / SC500**
-> (or anything you connect it to). **You alone are responsible for whatever
-> happens to your hardware.** There is **no warranty of any kind** (see GPLv2
-> §11–12). Keep the factory backup (`build/make-stock.sh`) and read the recovery
-> notes *before* you flash. If you're not comfortable recovering a device that
-> won't boot, don't flash it.
+SC1000 is **two parts that work together**:
 
-## MIDI map
+- **The plugin** (macOS) — drop any sample onto it and scratch it like a record:
+  variable-rate, reversible playback driven by a jog wheel and gated by the
+  crossfader, with the spinning platter and waveform the hardware itself lacks.
+  Runs as an **AU plugin** (Renoise, Logic, any AU host) or a **standalone app**.
+- **The controller firmware** — turns an SC1000 hardware scratch instrument into a
+  plug-and-play **USB-MIDI controller**: its jog wheel, crossfader, volume pots and
+  buttons stream as MIDI over one USB cable (which also powers it — no soldering).
 
-All on MIDI channel 1 (configurable via `midioutchannel`). Full reference:
-[`host/sc1000-controls.md`](host/sc1000-controls.md).
+Use either on its own — the plugin works with any controller sending the same MIDI,
+the firmware works with any MIDI software — but together they're a complete,
+cable-free scratch setup.
 
-| Control | MIDI |
-|---|---|
-| Crossfader | CC 16 (and CC 17, mirrored) |
-| Volume pots (back) | CC 18 / CC 19 |
-| Jog wheel | CC 20, relative (two's-complement: `01..3F` fwd, `7F..41` rev) |
-| Jog touch | Note 20 on/off |
-| Back buttons (sample/beat prev/next) | Notes 21–24 |
-| Shift (front) | Note 25 on/off (held) |
-| Start/Stop (front) | Note 26 / 27 (momentary tap) |
-| Cue buttons ×4 (top) | Notes 32–47 (momentary tap, one note per pin) |
+## Features
 
-## How it works
+- 🎚️ **Scratch any sample like vinyl** — reversible, variable-rate, jog-driven.
+- 💿 **A spinning platter, waveform + playhead** — the visual feedback the hardware
+  has no screen for.
+- ✂️ **Crossfader cut** — a sharp on/off for transforms and chirps, not a mushy fade.
+- 🎛️ **Cue pads, start/stop, drop-in samples** (wav / aiff / mp3 / flac).
+- 💾 **Self-contained songs** — the loaded sample is saved *inside* your project, so
+  nothing goes missing.
+- 🍎 **AU + standalone, Apple-Silicon native.**
+- 🔌 **No-solder controller firmware** — jog, crossfader, pots and buttons → USB-MIDI
+  over a single cable.
 
-- The micro-USB power port is wired to the A13 SoC's USB0 (OTG) controller, run as
-  a USB device gadget (`g_midi`).
-- A custom kernel + device tree enable the gadget (`usb0` set to `peripheral`);
-  `sc_midi_out.c` (added to xwax) emits the controls as MIDI.
-- Everything deploys through the SC1000's existing USB-stick updater (new
-  `zImage` + `dtb` + `xwax`).
+## Get the plugin (macOS, Apple Silicon)
 
-## Repository layout
+1. Download **[SC1000-AU-latest.zip](https://github.com/gherkins/sc1000-controller/raw/main/dist/SC1000-AU-latest.zip)**
+   (or the **[standalone app](https://github.com/gherkins/sc1000-controller/raw/main/dist/SC1000-Standalone-latest.zip)**).
+2. Unzip and drop **`SC1000.component`** into `~/Library/Audio/Plug-Ins/Components/`.
+3. Open it in your AU host (or just run `SC1000.app`), **drag a sample in**, and scratch.
 
-```
-firmware/
-  overlay/software/sc_midi_out.{c,h}   the MIDI-output module
-  sc1000-midi-out.patch                edits to xwax.c/.h, sc_input.c, Makefile
-build/
-  Dockerfile run.sh build.sh           Dockerised buildroot 2018.08.4 -> sc.tar
-  kernel-gadget.fragment               kernel config (gadget + g_midi + USB storage)
-  make-stock.sh                        build a factory-restore tarball
-  diag/                                on-device USB/gadget diagnostics
-host/
-  sc1000-controls.md                   full control -> MIDI map
-  midimon.swift                        tiny Core MIDI monitor
-  sc1000.midi.xml / sc1000-scripts.js  Mixxx mapping
-```
+> In Renoise, set the **instrument's MIDI input** to your controller — *not*
+> MIDI-mapping-to-parameter, which would break the relative jog (see
+> [technical details](#technical-details)).
 
-## Download (pre-built)
+## Get the controller firmware (for a real SC1000)
 
-Don't want to build it yourself? Grab the ready-to-flash firmware from the
-**[latest release](https://github.com/gherkins/sc1000-controller/releases/latest)**
-— download and unzip `sc1000-controller-firmware-v*.zip` to get `xwax` + `sc.tar`,
-then jump to [Flash](#flash). SHA-256 checksums are in the release notes.
+> ⚠️ **Use entirely at your own risk.** This is experimental, unofficial firmware.
+> It rebuilds and flashes your device's kernel, device tree and boot partition, and
+> it can **brick, damage, or "fry" your SC1000 / SC500** (or anything you connect it
+> to). **You alone are responsible for whatever happens to your hardware.** There is
+> **no warranty of any kind** (GPLv2 §11–12). Keep the factory backup
+> (`./build/make-stock.sh`) and read the recovery notes *before* you flash. If you're
+> not comfortable recovering a device that won't boot, don't flash it.
 
-## Build
-
-Needs Docker. From the repo root:
-
-```sh
-./build/run.sh
-```
-
-First run downloads buildroot 2018.08.4 and builds a toolchain + kernel (~30–60
-min, cached afterwards); it clones upstream `rasteri/SC1000` as the firmware
-source (or set `SC1000_SRC=/path/to/SC1000`). Output: **`build/out/stick/`** (the
-updater script + `sc.tar`).
-
-## Flash
-
-1. Copy both files from `build/out/stick/` (`xwax` + `sc.tar`) to a **FAT32 USB stick**.
-2. Insert it in the SC1000's **USB-A** port; plug headphones into the audio jack.
+1. Download **[sc1000-firmware-latest.zip](https://github.com/gherkins/sc1000-controller/raw/main/dist/sc1000-firmware-latest.zip)**
+   and unzip → `xwax` + `sc.tar`.
+2. Copy both onto a **FAT32 USB stick**, insert it in the SC1000's **USB-A** port.
 3. **Hold a beat button** and power on → it says "updated successfully."
-4. Power off, remove the stick. Connect the micro-USB to your computer → `MIDI Gadget` appears.
+4. Power off, remove the stick, connect the **micro-USB** to your computer → it
+   appears as a MIDI device named **`MIDI Gadget`** (a rename to "SC1000" is
+   planned). Set that as the plugin's MIDI input and play.
 
-Revert to stock: `./build/make-stock.sh` builds `sc-stock.tar`; flash it the same way.
+Prefer to build it yourself? See **[firmware/README.md](firmware/README.md)**.
 
-## Build notes
+## How they play together
 
-- `CONFIG_USB_STORAGE` is not in `sunxi_defconfig`; it must be in the kernel config
-  or the running kernel can't mount the USB stick.
-- The DTB drops the `usb0` vbus/id-detect GPIOs (the SC1000 straps VBUS-detect
-  high) so the gadget attaches.
-- Build on the container's own filesystem, not a macOS bind mount (buildroot's
-  toolchain build fails on it); `run.sh` uses a Docker named volume.
-- The device mounts the stick read-only; the diagnostics in `build/diag/` remount rw.
+The controller streams its jog wheel as a **relative** MIDI CC (so fast reversals
+never break), the crossfader and pots as CCs, and the buttons as notes. The plugin
+reads that raw stream and turns the jog into playhead movement — the scratch — gated
+by the crossfader cut. One USB cable carries power *and* MIDI. Full map:
+**[host/sc1000-controls.md](host/sc1000-controls.md)**.
 
-## Test
+## Technical details
 
-```sh
-swiftc -O host/midimon.swift -o /tmp/midimon && /tmp/midimon
-```
+- **Plugin format: AU, never VST3.** VST3 normalizes incoming MIDI CC into plugin
+  *parameters*, which destroys the SC1000's relative jog stream; AU and Standalone
+  pass raw CC through. This is load-bearing — see
+  [`vst/docs/ARCHITECTURE.md`](vst/docs/ARCHITECTURE.md).
+- **Firmware**: the micro-USB port runs the A13 SoC's USB0 as a device gadget
+  (`g_midi`); a custom kernel + device tree enable it and `sc_midi_out.c` (added to
+  xwax) emits the controls. Built with a Dockerised buildroot.
+- **Docs**: device → plugin MIDI contract
+  [`vst/docs/MIDI-MAPPING.md`](vst/docs/MIDI-MAPPING.md) · plugin architecture &
+  scratch DSP [`vst/docs/ARCHITECTURE.md`](vst/docs/ARCHITECTURE.md) · hardware map
+  [`host/sc1000-controls.md`](host/sc1000-controls.md).
+- **Build from source**: `make vst` (plugin) · `make firmware` (controller) ·
+  `make help` for all tasks.
 
-Move the controls to see the CC/Note messages. Any Core MIDI client (Mixxx, a
-DAW, a VST) sees the same device.
+## License & credits
 
-## Credits & license
+GPLv2 for the firmware — inherited from [xwax](https://xwax.org) (© Mark Hills) and
+SC1000 (© Andrew Tait / rasteri). The plugin is built on [JUCE](https://juce.com)
+(GPL), so distributed plugin binaries are GPL too. See [`COPYING`](COPYING).
 
 _AI-transparency: created with Claude Opus 4.8._
-
-GPLv2 — inherited from xwax (© Mark Hills) and SC1000 (© Andrew Tait / rasteri).
-See [`COPYING`](COPYING). This is an independent add-on; the build pulls the SC1000
-firmware from upstream rather than vendoring it.

@@ -8,7 +8,7 @@ ScratchAudioProcessorEditor::ScratchAudioProcessorEditor (ScratchAudioProcessor&
 {
     setLookAndFeel (&lnf);
 
-    headerLabel.setText ("SCRATCH", juce::dontSendNotification);
+    headerLabel.setText ("SC1000", juce::dontSendNotification);
     headerLabel.setJustificationType (juce::Justification::centred);
     headerLabel.setColour (juce::Label::textColourId, renoise::text);
     headerLabel.setColour (juce::Label::backgroundColourId, renoise::panel);

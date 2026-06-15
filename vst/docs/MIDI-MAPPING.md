@@ -2,8 +2,9 @@
 
 This is the **device → plugin** MIDI contract: exactly what the SC1000 controller
 firmware emits, verified live on an SC1000 MK2. The plugin's MIDI-input layer
-parses this. (Producer side: `sc_midi_out.c` in
-<https://github.com/gherkins/sc1000-controller>.)
+parses this. Producer side (same repo): the canonical hardware → MIDI map is
+[`host/sc1000-controls.md`](../../host/sc1000-controls.md), emitted by
+`firmware/overlay/software/sc_midi_out.c`.
 
 ## Device identity
 

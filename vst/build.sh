@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local build helper for scratch-vst (AU + Standalone, macOS/arm64).
+# Local build helper for the SC1000 plugin (AU + Standalone, macOS/arm64).
 # JUCE is pulled via CMake FetchContent into build/ — nothing is installed globally.
 #
 # If this machine's Command Line Tools libc++ is broken (missing <algorithm> etc.),
@@ -27,5 +27,5 @@ cmake --build "$BUILD_DIR" -j"$(sysctl -n hw.ncpu)"
 
 echo
 echo "Built ($BUILD_TYPE)."
-echo "  AU:         ~/Library/Audio/Plug-Ins/Components/Scratch VST.component (auto-installed)"
-echo "  Standalone: $BUILD_DIR/ScratchVST_artefacts/$BUILD_TYPE/Standalone/Scratch VST.app"
+echo "  AU:         ~/Library/Audio/Plug-Ins/Components/SC1000.component (auto-installed)"
+echo "  Standalone: $BUILD_DIR/SC1000_artefacts/$BUILD_TYPE/Standalone/SC1000.app"

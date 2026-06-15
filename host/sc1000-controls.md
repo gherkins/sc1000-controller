@@ -3,6 +3,11 @@
 All messages on MIDI channel = `midioutchannel` (default 0 → "channel 1"), from
 the **MIDI Gadget** USB device. Set in `scsettings.txt` on the stick.
 
+This is the **producer** side (what the firmware emits). The **consumer** side —
+how the SC1000 plugin parses this contract, plus the forward-push touch-dropout
+analysis — is in [`vst/docs/MIDI-MAPPING.md`](../vst/docs/MIDI-MAPPING.md) and
+[`vst/docs/ARCHITECTURE.md`](../vst/docs/ARCHITECTURE.md).
+
 | Control                | Location | Firmware source            | MIDI out            | Status |
 |------------------------|----------|----------------------------|---------------------|--------|
 | **Crossfader**         | front    | PIC ADC XFADER1 `ADCs[0]`  | **CC 16** (0–127)   | ✅ MVP |
