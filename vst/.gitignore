@@ -1,0 +1,20 @@
+# build output
+/build/
+/cmake-build-*/
+
+# fetched dependencies (JUCE is pulled via FetchContent into build/)
+/_deps/
+
+# macOS
+.DS_Store
+
+# editor/IDE
+.idea/
+.vscode/
+*.xcodeproj/
+
+# MCP scratch output
+/.playwright-mcp/
+
+# local Claude Code instructions (not for the public repo)
+/CLAUDE.local.md
