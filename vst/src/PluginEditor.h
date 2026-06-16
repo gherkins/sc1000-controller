@@ -76,6 +76,10 @@ public:
     // the head glides over slow-speed 7-bit/ADC jitter without lagging real moves.
     void setHeadDisplay (float pos) noexcept { headDisplay = juce::jlimit (0.0f, 1.0f, pos); }
 
+    // Debounced finger-on-platter flag, pushed each tick by the editor's timer so the
+    // touch ring rides capacitive dropouts (brief note-off flicker) without blinking.
+    void setTouchDisplay (bool on) noexcept { touchDisplay = on; }
+
     // --- device geometry, as fractions of the body (from the product photo) ---
     static constexpr float kBodyRatio  = 0.772f; // body width / height
     static constexpr float kPlatterCx  = 0.500f; // platter centre x
@@ -140,10 +144,19 @@ private:
         g.setColour (juce::Colours::black);                // spindle hole
         g.fillEllipse (cx - 2.5f, cy - 2.5f, 5.0f, 5.0f);
 
-        // marker: 0 at top, angle from playhead seconds (≈ 33 rpm visual)
+        // marker: 0 at top. Accumulate playhead deltas (≈ 33 rpm visual) and phase-unwrap
+        // the loop boundary so the marker keeps spinning instead of snapping back to 0 when
+        // playback wraps end→start. Sub-loop jumps (scratches) still rotate the marker 1:1.
         constexpr double secsPerRev = 1.8;
-        const float ang = (float) (proc.getPlayheadSeconds() * juce::MathConstants<double>::twoPi / secsPerRev)
-                        - juce::MathConstants<float>::halfPi;
+        constexpr double twoPi      = juce::MathConstants<double>::twoPi;
+        const double now = proc.getPlayheadSeconds();
+        const double len = proc.getLengthSeconds();
+        double delta = now - lastPlayheadSeconds;
+        if (len > 0.0)
+            delta -= len * std::round (delta / len);  // unwrap end→start wrap to the short way round
+        markerAngle = std::fmod (markerAngle + delta * (twoPi / secsPerRev), twoPi);
+        lastPlayheadSeconds = now;
+        const float ang = (float) markerAngle - juce::MathConstants<float>::halfPi;
         const float ix = cx + std::cos (ang) * lr;
         const float iy = cy + std::sin (ang) * lr;
         const float ox = cx + std::cos (ang) * r * 0.9f;
@@ -156,7 +169,7 @@ private:
         g.setColour (renoise::accent);
         g.drawEllipse (ox - dot, oy - dot, dot * 2.0f, dot * 2.0f, 1.5f);
 
-        if (proc.getControlState().touched.load())         // finger-on-platter ring
+        if (touchDisplay)                                  // finger-on-platter ring (debounced)
         {
             g.setColour (renoise::accent);
             g.drawEllipse (cx - r, cy - r, d, d, 3.0f);
@@ -266,7 +279,10 @@ private:
         }
     }
 
-    float headDisplay = 0.5f; // smoothed fader-head position (matches faderRaw default: centre)
+    float  headDisplay         = 0.5f;  // smoothed fader-head position (matches faderRaw default: centre)
+    bool   touchDisplay        = false; // debounced finger-on-platter state (set by the editor timer)
+    double markerAngle         = 0.0;   // accumulated platter rotation (rad) — spins continuously across loops
+    double lastPlayheadSeconds = 0.0;   // previous playhead sample, for delta accumulation
     ScratchAudioProcessor& proc;
 };
 
@@ -300,6 +316,7 @@ private:
 
     juce::Rectangle<int> headerBounds;
     float faderDisplay = 1.0f; // smoothed fader-head position fed to the deck
+    int   touchHoldTicks = 0;  // debounce: ticks left to keep the touch ring lit after release
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ScratchAudioProcessorEditor)
 };

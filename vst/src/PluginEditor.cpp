@@ -74,6 +74,15 @@ void ScratchAudioProcessorEditor::timerCallback()
     faderDisplay += (target - faderDisplay) * a;
     deck.setHeadDisplay (faderDisplay);
 
+    // Debounce the finger-on-platter ring: light instantly on touch, then hold for a
+    // few ticks after release so capacitive dropouts (brief note-off flicker) don't make
+    // the ring blink. 30 Hz timer → kTouchHoldTicks ≈ 0.2 s of hold (cf. engine kTouchDebounce).
+    static constexpr int kTouchHoldTicks = 6;
+    const bool touchNow = processor.getControlState().touched.load();
+    touchHoldTicks = touchNow ? kTouchHoldTicks : juce::jmax (0, touchHoldTicks - 1);
+    const bool touchOn = touchHoldTicks > 0;
+    deck.setTouchDisplay (touchOn);
+
     waveform.repaint();
     deck.repaint();
 
