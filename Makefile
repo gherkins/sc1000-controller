@@ -1,4 +1,4 @@
-# SC1000 — top-level tasks for both halves of the project:
+# SC1000 Midi Controller — top-level tasks for both halves of the project:
 #   * the controller firmware (firmware/ + build/, Docker buildroot)
 #   * the SC1000 plugin       (vst/, JUCE AU + Standalone)
 #
@@ -18,7 +18,7 @@ SHOTPNG := docs/screenshot.png
 .PHONY: help vst vst-debug auval shot standalone firmware stock dist publish clean
 
 help: ## Show this help
-	@echo "SC1000 — make targets:"
+	@echo "SC1000 Midi Controller — make targets:"
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 

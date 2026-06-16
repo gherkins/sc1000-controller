@@ -1,4 +1,4 @@
-# SC1000
+# SC1000 Midi Controller
 
 **Drop in a sample and scratch it like vinyl** — spin the platter, cut it with the
 crossfader, watch the waveform and playhead move. A macOS scratch instrument, plus
@@ -9,7 +9,7 @@ USB-MIDI controller that drives it.
   <img src="docs/screenshot.png" alt="The SC1000 plugin — spinning platter, waveform and playhead, crossfader and cue pads" width="380">
 </p>
 
-SC1000 is **two parts that work together**:
+SC1000 Midi Controller is **two parts that work together**:
 
 - **The plugin** (macOS) — drop any sample onto it and scratch it like a record:
   variable-rate, reversible playback driven by a jog wheel and gated by the
