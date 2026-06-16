@@ -1,16 +1,7 @@
 # SC1000 Midi Controller
 
 **Reflash a [SC1000](https://github.com/rasteri/SC1000) scratch instrument into a
-class-compliant USB-MIDI controller — then scratch any sample like vinyl with the
-plugin built to read it.** Your SC1000 MK2 runs custom firmware that turns its
-micro-USB port into a MIDI device and streams every control out: the jog wheel as a
-**relative**, two's-complement CC (so fast reversals never alias), crossfader and
-pots as CCs, buttons as notes — one cable for power *and* MIDI, no soldering. The
-companion plugin
-(macOS, **AU + Standalone**) decodes that raw stream into reversible, variable-rate
-playhead motion gated by the crossfader cut, with the motor / slipmat / brake feel
-ported straight from the firmware's `player.c` and the spinning platter + waveform
-the hardware has no screen for.
+class-compliant USB-MIDI controller 👾
 
 <p align="center">
   <img src="docs/screenshot.png" alt="The SC1000 plugin — spinning platter, waveform and playhead, crossfader and cue pads" width="380">
