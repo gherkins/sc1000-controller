@@ -28,20 +28,7 @@ SC1000 Midi Controller is **two parts that work together**:
 
 Use either on its own — the plugin works with any controller sending the same MIDI,
 the firmware works with any MIDI software — but together they're a complete,
-cable-free scratch setup.
-
-## Features
-
-- 🎚️ **Scratch any sample like vinyl** — reversible, variable-rate, jog-driven.
-- 💿 **A spinning platter, waveform + playhead** — the visual feedback the hardware
-  has no screen for.
-- ✂️ **Crossfader cut** — a sharp on/off for transforms and chirps, not a mushy fade.
-- 🎛️ **Cue pads, start/stop, drop-in samples** (wav / aiff / mp3 / flac).
-- 💾 **Self-contained songs** — the loaded sample is saved *inside* your project, so
-  nothing goes missing.
-- 🍎 **AU + standalone, Apple-Silicon native.**
-- 🔌 **No-solder controller firmware** — jog, crossfader, pots and buttons → USB-MIDI
-  over a single cable.
+1-cable scratch setup.
 
 ## Get the plugin (macOS, Apple Silicon)
 
@@ -54,7 +41,7 @@ cable-free scratch setup.
 > MIDI-mapping-to-parameter, which would break the relative jog (see
 > [technical details](#technical-details)).
 
-## Get the controller firmware (for a real SC1000)
+## Get the controller firmware (for a SC1000MK2)
 
 > ⚠️ **Use entirely at your own risk.** This is experimental, unofficial firmware.
 > It rebuilds and flashes your device's kernel, device tree and boot partition, and
