@@ -18,4 +18,6 @@ vst/build/
 # macOS
 .DS_Store
 
-# dist/ is intentionally tracked (rolling *-latest artifacts linked in the README)
+# dist/ artifacts are published to the orphan 'artifacts' branch (make publish),
+# NOT committed to main — keeps main's history binary-free and the repo bounded.
+/dist/

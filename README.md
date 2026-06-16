@@ -22,8 +22,8 @@ the firmware works with any MIDI software — but together they're a complete,
 
 ## Get the plugin (macOS, Apple Silicon)
 
-1. Download **[SC1000-AU-latest.zip](https://github.com/gherkins/sc1000-controller/raw/main/dist/SC1000-AU-latest.zip)**
-   (or the **[standalone app](https://github.com/gherkins/sc1000-controller/raw/main/dist/SC1000-Standalone-latest.zip)**).
+1. Download **[SC1000-AU-latest.zip](https://github.com/gherkins/sc1000-controller/raw/artifacts/SC1000-AU-latest.zip)**
+   (or the **[standalone app](https://github.com/gherkins/sc1000-controller/raw/artifacts/SC1000-Standalone-latest.zip)**).
 2. Unzip and drop **`SC1000.component`** into `~/Library/Audio/Plug-Ins/Components/`.
 3. Open it in your AU host (or just run `SC1000.app`), **drag a sample in**, and scratch.
 
@@ -41,7 +41,7 @@ the firmware works with any MIDI software — but together they're a complete,
 > (`./build/make-stock.sh`) and read the recovery notes *before* you flash. If you're
 > not comfortable recovering a device that won't boot, don't flash it.
 
-1. Download **[sc1000-firmware-latest.zip](https://github.com/gherkins/sc1000-controller/raw/main/dist/sc1000-firmware-latest.zip)**
+1. Download **[sc1000-firmware-latest.zip](https://github.com/gherkins/sc1000-controller/raw/artifacts/sc1000-firmware-latest.zip)**
    and unzip → `xwax` + `sc.tar`.
 2. Copy both onto a **FAT32 USB stick**, insert it in the SC1000's **USB-A** port.
 3. **Hold a beat button** and power on → it says "updated successfully."

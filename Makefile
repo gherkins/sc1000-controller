@@ -2,7 +2,8 @@
 #   * the controller firmware (firmware/ + build/, Docker buildroot)
 #   * the SC1000 plugin       (vst/, JUCE AU + Standalone)
 #
-# Tinker locally, then `make publish` to ship all artifacts + source.
+# Tinker locally, commit source to main as usual, then `make publish` to ship the
+# built binaries to the orphan `artifacts` branch (keeps main's history binary-free).
 # Run `make help` for the list.
 
 CONFIG  ?= Release
@@ -13,6 +14,11 @@ AU      := $(ART)/AU/SC1000.component
 APP     := $(ART)/Standalone/SC1000.app
 DIST    := dist
 SHOTPNG := docs/screenshot.png
+
+# Binaries are published to an orphan branch (force-pushed, single commit) instead
+# of main's history, so cloning main stays lean and the repo size stays bounded.
+ARTBRANCH := artifacts
+ARTFILES  := SC1000-AU-latest.zip SC1000-Standalone-latest.zip sc1000-firmware-latest.zip
 
 .DEFAULT_GOAL := help
 .PHONY: help vst vst-debug auval shot standalone firmware stock dist publish clean
@@ -66,10 +72,26 @@ dist: vst ## Package latest artifacts into dist/ (plugin always; firmware if bui
 	fi
 	@echo && ls -lh $(DIST)
 
-publish: dist ## Commit + push the dist/ artifacts (one-command publish)
-	git add $(DIST)
-	git commit -m "Publish latest artifacts"
-	git push
+publish: dist ## Force-push dist/ artifacts to the orphan '$(ARTBRANCH)' branch (main stays binary-free)
+	@set -e; \
+	idx="$(CURDIR)/.git/artifacts.index"; rm -f "$$idx"; \
+	export GIT_INDEX_FILE="$$idx"; \
+	echo "==> building '$(ARTBRANCH)' tree (carrying forward any artifact not rebuilt this run)"; \
+	if git fetch -q origin $(ARTBRANCH) 2>/dev/null; then git read-tree FETCH_HEAD; fi; \
+	for f in $(ARTFILES); do \
+		if [ -f "$(DIST)/$$f" ]; then \
+			blob=$$(git hash-object -w "$(DIST)/$$f"); \
+			git update-index --add --cacheinfo 100644,$$blob,$$f; \
+			echo "   + $$f"; \
+		fi; \
+	done; \
+	tree=$$(git write-tree); \
+	if [ -z "$$(git ls-tree $$tree)" ]; then echo "   nothing to publish"; rm -f "$$idx"; exit 1; fi; \
+	commit=$$(git commit-tree $$tree -m "Artifacts $$(date -u +%Y-%m-%dT%H:%M:%SZ)"); \
+	rm -f "$$idx"; \
+	git update-ref refs/heads/$(ARTBRANCH) $$commit; \
+	git push -fq origin $(ARTBRANCH); \
+	echo "==> published $(ARTBRANCH) @ $$commit — main history untouched (commit/push source separately)"
 
 clean: ## Remove the plugin build dir
 	rm -rf $(VST)/build
