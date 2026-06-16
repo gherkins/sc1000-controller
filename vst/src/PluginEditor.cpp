@@ -66,20 +66,30 @@ void ScratchAudioProcessorEditor::resized()
 
 void ScratchAudioProcessorEditor::timerCallback()
 {
+    // Glide the displayed fader head: damps the slow-speed 7-bit/ADC jitter on the
+    // head without lagging real moves — big jumps snap through (alpha → 1), only
+    // small jitter glides (alpha → 0.3). Display-only; the value mapping uses raw.
+    const float target = juce::jlimit (0.0f, 1.0f, processor.getControlState().faderRaw.load());
+    const float a      = juce::jlimit (0.30f, 1.0f, std::abs (target - faderDisplay) * 8.0f);
+    faderDisplay += (target - faderDisplay) * a;
+    deck.setHeadDisplay (faderDisplay);
+
     waveform.repaint();
     deck.repaint();
 
     auto& cs = processor.getControlState();
     juce::String info;
-    info << (cs.playing.load() ? "PLAY   " : "STOP   ");
+    info << (cs.playing.load() ? "PLAY  " : "STOP  ");
     if (processor.hasSample())
-        info << processor.getSampleName() << "   "
-             << juce::String (processor.getPlayheadSeconds(), 2) << " / "
-             << juce::String (processor.getLengthSeconds(), 2) << " s   ";
+        info << processor.getSampleName() << "  "
+             << juce::String (processor.getPlayheadSeconds(), 2) << "/"
+             << juce::String (processor.getLengthSeconds(), 2) << "s";
     else
-        info << "no sample   ";
-    info << "xfade " << juce::String (cs.crossfader.load(), 2)
-         << (cs.touched.load() ? "   [touch]" : "");
+        info << "no sample";
+    // The shift-layer values live in the deck's bottom-right panel; here we just
+    // surface the live transport/touch state (and SHIFT while it's held).
+    if (cs.shiftHeld.load()) info << "  SHIFT";
+    if (cs.touched.load())   info << "  [touch]";
     infoLabel.setText (info, juce::dontSendNotification);
 }
 

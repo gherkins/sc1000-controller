@@ -72,6 +72,10 @@ class DeckFace : public juce::Component
 public:
     explicit DeckFace (ScratchAudioProcessor& p) : proc (p) {}
 
+    // Smoothed fader-head position (0..1), pushed each tick by the editor's timer so
+    // the head glides over slow-speed 7-bit/ADC jitter without lagging real moves.
+    void setHeadDisplay (float pos) noexcept { headDisplay = juce::jlimit (0.0f, 1.0f, pos); }
+
     // --- device geometry, as fractions of the body (from the product photo) ---
     static constexpr float kBodyRatio  = 0.772f; // body width / height
     static constexpr float kPlatterCx  = 0.500f; // platter centre x
@@ -101,12 +105,14 @@ public:
         drawPlatter (g, fx (kPlatterCx), fy (kPlatterCy), kPlatterDia * bw * 0.5f);
 
         const float cs = kPadSize * bw;
-        drawCue (g, fx (kPadLeftX),  fy (kPadTopY), cs, "CUE 3");
-        drawCue (g, fx (kPadRightX), fy (kPadTopY), cs, "CUE 4");
-        drawCue (g, fx (kPadLeftX),  fy (kPadBotY), cs, "CUE 1");
-        drawCue (g, fx (kPadRightX), fy (kPadBotY), cs, "CUE 2");
+        // cue pad → crossfader mode (faderMode): cue 1=pitch 2=volume 3=curve 4=brake
+        drawCue (g, fx (kPadLeftX),  fy (kPadTopY), cs, "CURVE", 2);
+        drawCue (g, fx (kPadRightX), fy (kPadTopY), cs, "BRAKE", 3);
+        drawCue (g, fx (kPadLeftX),  fy (kPadBotY), cs, "PITCH", 0);
+        drawCue (g, fx (kPadRightX), fy (kPadBotY), cs, "VOL",   1);
 
         drawCrossfader (g, bx, by, bw, bh);
+        drawModeReadout (g);
     }
 
 private:
@@ -157,18 +163,23 @@ private:
         }
     }
 
-    void drawCue (juce::Graphics& g, float x, float y, float s, const juce::String& label)
+    // A cue pad. `mode` is the crossfader mode it selects (0-3); the active one
+    // gets a mode-coloured border so you can see the current selection at a glance
+    // (inner fill and label stay default).
+    void drawCue (juce::Graphics& g, float x, float y, float s, const juce::String& label, int mode)
     {
+        const bool active = (proc.getControlState().faderMode.load() == mode);
+
         juce::Rectangle<float> sq (x, y, s, s);
         g.setGradientFill (juce::ColourGradient (renoise::buttonTop, sq.getX(), sq.getY(),
                                                  renoise::buttonBot, sq.getX(), sq.getBottom(), false));
         g.fillRoundedRectangle (sq, 3.0f);
-        g.setColour (renoise::accent.withAlpha (0.16f));    // faint lit centre
+        g.setColour (renoise::accent.withAlpha (0.16f));    // faint lit centre (default)
         g.fillRoundedRectangle (sq.reduced (s * 0.16f), 2.0f);
-        g.setColour (renoise::accent);
-        g.drawRoundedRectangle (sq, 3.0f, 1.5f);
+        g.setColour (active ? renoise::modeColour (mode) : renoise::accent); // active → mode-coloured border
+        g.drawRoundedRectangle (sq, 3.0f, active ? 2.0f : 1.5f);
 
-        g.setColour (renoise::text);                        // label below the pad
+        g.setColour (renoise::text);                        // label below the pad (default)
         g.setFont (juce::Font (juce::FontOptions (juce::jlimit (8.0f, 12.0f, s * 0.30f), juce::Font::bold)));
         const float lw = juce::jmax (s, 44.0f);
         const juce::Rectangle<float> lr (sq.getCentreX() - lw * 0.5f, sq.getBottom() + 2.0f, lw, 13.0f);
@@ -192,16 +203,21 @@ private:
         g.setColour (renoise::border);
         g.drawRoundedRectangle (slot, 3.0f, 1.0f);
 
-        const float v       = juce::jlimit (0.0f, 1.0f, proc.getControlState().crossfader.load());
-        const bool  passing = v > 0.01f;
+        // Head follows the live physical fader (faderRaw) even while Shift freezes the
+        // cut. Its colour stays neutral (orange) at rest and takes the active mode's
+        // colour only while Shift is held (you're dialing that param). The cut/pass
+        // state is not colour-coded.
+        auto&       cstate  = proc.getControlState();
+        const float v       = headDisplay; // smoothed by the editor timer (see setHeadDisplay)
+        const bool  shifted = cstate.shiftHeld.load();
 
         const float headW  = kHeadW * bw;
         const float headH  = kHeadH * bh;
         const float travel = trackW - headW;
         juce::Rectangle<float> head (tx + travel * v, ty - headH * 0.5f, headW, headH);
 
-        const juce::Colour top = passing ? renoise::accent    : renoise::buttonTop;
-        const juce::Colour bot = passing ? renoise::accentDim : renoise::buttonBot;
+        const juce::Colour top = shifted ? renoise::modeColour (cstate.faderMode.load()) : renoise::accent;
+        const juce::Colour bot = shifted ? top.darker (0.4f) : renoise::accentDim;
         g.setGradientFill (juce::ColourGradient (top, head.getX(), head.getY(),
                                                  bot, head.getX(), head.getBottom(), false));
         g.fillRoundedRectangle (head, 3.0f);
@@ -212,6 +228,45 @@ private:
         g.drawLine (head.getCentreX(), head.getY() + 4.0f, head.getCentreX(), head.getBottom() - 4.0f, 1.5f);
     }
 
+    // Bottom-right panel: all four shift-layer values, always shown. The active
+    // mode (faderMode) is marked with a caret and drawn in its mode colour; the
+    // rest are dimmed. Label left-aligned, value right-aligned per row.
+    void drawModeReadout (juce::Graphics& g)
+    {
+        auto& cs = proc.getControlState();
+        const int active = cs.faderMode.load();
+
+        const int   pct = juce::roundToInt ((cs.pitchScale.load() - 1.0f) * 100.0f);
+        const float cv  = cs.faderCurve.load();
+        const juce::String mul (juce::CharPointer_UTF8 ("\xc3\x97")); // ×
+        const juce::String labels[4] = { "PITCH", "VOL", "CURVE", "BRAKE" };
+        const juce::String vals[4] = {
+            juce::String (pct > 0 ? "+" : "") + juce::String (pct) + "%",
+            juce::String (juce::roundToInt (cs.volA.load() * 100.0f)) + "%",
+            juce::String (cv < 0.34f ? "sharp" : cv < 0.67f ? "mid" : "soft"),
+            juce::String (cs.brakeScale.load(), 1) + mul
+        };
+
+        const float lh = 14.0f, w = 96.0f;
+        juce::Rectangle<float> box ((float) getWidth() - w - 6.0f,
+                                    (float) getHeight() - lh * 4.0f - 6.0f, w, lh * 4.0f);
+        g.setColour (renoise::bg.withAlpha (0.62f));        // faint backing for legibility
+        g.fillRoundedRectangle (box.expanded (4.0f, 3.0f), 3.0f);
+
+        g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::plain)));
+        for (int i = 0; i < 4; ++i)
+        {
+            const bool on = (i == active);
+            juce::Rectangle<float> row (box.getX(), box.getY() + (float) i * lh, box.getWidth(), lh);
+            g.setColour (on ? renoise::modeColour (i) : renoise::textDim);
+            g.drawText (on ? juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xb8")) : juce::String(),
+                        row.removeFromLeft (12.0f), juce::Justification::centredLeft);
+            g.drawText (labels[i], row, juce::Justification::centredLeft);
+            g.drawText (vals[i],   row, juce::Justification::centredRight);
+        }
+    }
+
+    float headDisplay = 1.0f; // smoothed fader-head position (matches faderRaw default)
     ScratchAudioProcessor& proc;
 };
 
@@ -244,6 +299,7 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
 
     juce::Rectangle<int> headerBounds;
+    float faderDisplay = 1.0f; // smoothed fader-head position fed to the deck
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ScratchAudioProcessorEditor)
 };

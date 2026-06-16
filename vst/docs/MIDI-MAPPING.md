@@ -40,10 +40,10 @@ configurable; don't hard-filter on channel 1.
 | Note **25** (`0x19`) | **Shift** (front) | Note-On / Off | **held gate**: on = pressed, off = released |
 | Note **26** (`0x1A`) | Start/Stop, deck 0 | Note-On→Off | momentary **tap** — reserved (no physical button on MK2) |
 | Note **27** (`0x1B`) | **Start/Stop** (front) | Note-On→Off | momentary **tap** — the MK2's physical button (deck 1) |
-| Note **32** (`0x20`) | **Cue** pad 1 (top) | Note-On→Off | momentary **tap** |
-| Note **33** (`0x21`) | **Cue** pad 2 (top) | Note-On→Off | momentary **tap** |
-| Note **34** (`0x22`) | **Cue** pad 3 (top) | Note-On→Off | momentary **tap** |
-| Note **35** (`0x23`) | **Cue** pad 4 (top) | Note-On→Off | momentary **tap** |
+| Note **32** (`0x20`) | **Cue** bottom-left  | Note-On→Off | tap → selects **pitch** mode |
+| Note **33** (`0x21`) | **Cue** top-left     | Note-On→Off | tap → selects **curve** mode |
+| Note **34** (`0x22`) | **Cue** top-right    | Note-On→Off | tap → selects **brake** mode |
+| Note **35** (`0x23`) | **Cue** bottom-right | Note-On→Off | tap → selects **volume** mode |
 
 > Note CC20 and Note20 share number `0x14` but are different message **types**
 > (CC `0xB0` vs Note `0x90/0x80`) — they don't collide.
@@ -90,9 +90,10 @@ plugin reads CC 21 when present and falls back to the Note 20 edge otherwise.
 
 ### Shift (Note 25)
 
-- A **held gate**: `90 19 7F` on press, `80 19 00` on release. Unlike the cue and
-  start buttons below, Shift reports its real held state, so the plugin can build a
-  shift layer on top of the other controls.
+- A **held gate**: `90 19 7F` on press, `80 19 00` on release (verified live).
+  Unlike the cue/start taps, Shift reports its real held state. The plugin uses it
+  as the **crossfader shift-layer gate**: while held, the crossfader stops cutting
+  and instead dials the cue-selected parameter (see ARCHITECTURE.md).
 
 ### Start/Stop (Notes 26/27) — momentary tap
 
@@ -102,18 +103,23 @@ plugin reads CC 21 when present and falls back to the Note 20 edge otherwise.
 - The MK2's single front Start/Stop button emits **Note 27** (deck 1, verified).
   Note 26 is the deck-0 counterpart the firmware can emit but the MK2 has no
   physical button for it — reserved.
+- In the plugin this is the **only transport toggle** (play/stop); the cue pads no
+  longer toggle play — they select the crossfader shift-layer mode.
 
 ### Cue buttons (Notes 32–35) — momentary tap
 
-- The 4 top cue buttons (around the jog wheel) each emit a **tap** (Note-On then
-  Note-Off), one distinct note per pad: **32, 33, 34, 35** on the MK2 (verified).
-  Same one-shot semantics as Start/Stop.
-- Firmware rule is `32 + <expander pin>`, so other hardware could land anywhere in
-  **32–47**; on the MK2 the four pads are pins 0–3 → 32–35. (Which note is which
-  physical corner wasn't pinned down — the plugin only needs 4 distinct cue pads.)
-- Pressing a cue **while Shift is held** triggers the firmware's *delete-cue* on
-  the same pad and emits the **same note** — distinguish "set" vs "delete" using
-  the separately-reported **Shift** state (Note 25), not a different note.
+- The 4 top cue buttons each emit a **tap** (Note-On then Note-Off), one note per
+  pad. On the MK2 the pads are expander pins 0–3 → notes **32–35**, wired (verified
+  live, *not* in cue-number order): **32 = bottom-left, 33 = top-left,
+  34 = top-right, 35 = bottom-right.**
+- The plugin uses the cue taps to **select the crossfader's shift-layer mode** (not
+  transport): BL → pitch, TL → curve, TR → brake, BR → volume (see ARCHITECTURE.md).
+  The note→mode pairing is a small lookup (`kCueNoteToMode` in `PluginProcessor.cpp`)
+  because the pins aren't in corner order.
+- Firmware rule is `32 + <expander pin>`, so other hardware could land elsewhere in
+  **32–47** — re-capture with `host/midimon.swift` and adjust the lookup if so.
+- Pressing a cue **while Shift is held** emits the **same note** (firmware
+  *delete-cue*); the plugin treats cue = mode-select regardless of Shift.
 
 ## Quirks to handle
 
@@ -154,8 +160,9 @@ MIDI: 90 19 7F        # Shift pressed        (Note 25, held)
 MIDI: 80 19 00        # Shift released
 MIDI: 90 1B 7F        # Start/Stop tap       (Note 27 on...
 MIDI: 80 1B 00        #                       ...then off, back-to-back)
-MIDI: 90 20 7F        # Cue pad 1 tap        (Note 32 on...
+MIDI: 90 20 7F        # Cue tap, bottom-left (Note 32 on...
 MIDI: 80 20 00        #                       ...then off)
 ```
 
-(Captured live on an SC1000 MK2: Shift = 25, Start/Stop = 27, cue pads = 32–35.)
+(Captured live on an SC1000 MK2: Shift = 25, Start/Stop = 27, cue pads 32–35 =
+BL / TL / TR / BR.)

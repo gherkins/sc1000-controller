@@ -5,6 +5,49 @@ namespace
 {
     constexpr int kStateMagic = 0x53435231; // 'SCR1'
 
+    // --- Shift-layer crossfader mappings (fader position 0..1 → a parameter) ---
+    // These shape how the *input* fader maps to each mode (snap zones, detents,
+    // ranges). The engine owns how it then *applies* the resulting scalar. Tune the
+    // feel of each mode here.
+    constexpr float kPitchRange = 0.20f;  // ±20% varispeed at the fader extremes
+    constexpr float kPitchSnap  = 0.20f;  // centre ±this (in fader units) snaps to unity
+    constexpr float kVolDetent  = 0.75f;  // fader position that snaps to unity volume
+    constexpr float kVolSnap    = 0.04f;  // half-width of the unity-volume detent
+    constexpr float kBrakeMin   = 0.25f;  // shortest tape stop (fader left); centre = 1.0× (stock)
+    constexpr float kBrakeMax   = 4.0f;   // longest tape stop (fader right)
+
+    // Cue note → crossfader mode (0=pitch 1=volume 2=curve 3=brake). The MK2's
+    // expander pins do NOT map the corners to notes 32-35 in order — verified live
+    // on hardware (host/midimon): note 32 = bottom-left (cue 1), 33 = top-left
+    // (cue 3), 34 = top-right (cue 4), 35 = bottom-right (cue 2). So:
+    constexpr int kCueNoteToMode[4] = { 0, 2, 3, 1 }; // indexed by (note - 32)
+
+    // Cue 1 → pitch: ±kPitchRange varispeed, snapping to unity across the centre.
+    float mapPitch (float x)
+    {
+        const float d = x - 0.5f;
+        if (std::abs (d) <= kPitchSnap)
+            return 1.0f;                                    // centre detent → unity
+        if (d < 0.0f)                                       // left half → slow down
+            return (1.0f - kPitchRange) + (x / (0.5f - kPitchSnap)) * kPitchRange;
+        const float t = (x - (0.5f + kPitchSnap)) / (0.5f - kPitchSnap); // right half → speed up
+        return 1.0f + t * kPitchRange;
+    }
+
+    // Cue 2 → volume: 0→unity ramp up to a detent at kVolDetent, unity at/above it.
+    float mapVolume (float x)
+    {
+        if (x <= kVolDetent - kVolSnap)
+            return x / (kVolDetent - kVolSnap);             // silence → unity
+        return 1.0f;                                        // detent + above hold unity
+    }
+
+    // Cue 4 → brake: exponential so the stock value (1.0×) sits at the fader centre.
+    float mapBrake (float x)
+    {
+        return kBrakeMin * std::pow (kBrakeMax / kBrakeMin, x);
+    }
+
     // Downmix any multi-channel buffer to a single mono channel (average of the
     // channels). Returns the buffer unchanged if it is already mono. The plugin is
     // mono end-to-end: one waveform, half the data, and the engine fans the single
@@ -73,7 +116,28 @@ void ScratchAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             const int v  = b[2] & 0x7F;
             switch (cc)
             {
-                case 16: controlState.crossfader.store ((float) v / 127.0f); break; // crossfader
+                case 16: // crossfader — normally the CUT, but a shift-layer param while Shift is held
+                {
+                    const float x = (float) v / 127.0f;
+                    controlState.faderRaw.store (x); // live physical position (for the GUI head)
+                    if (controlState.shiftHeld.load())
+                    {
+                        switch (controlState.faderMode.load())
+                        {
+                            case 0: controlState.pitchScale.store (mapPitch (x));  break; // cue 1: pitch
+                            case 1: controlState.volA.store       (mapVolume (x)); break; // cue 2: volume (reuses volA)
+                            case 2: controlState.faderCurve.store (x);             break; // cue 3: curve (left sharp → right soft)
+                            case 3: controlState.brakeScale.store (mapBrake (x));  break; // cue 4: brake / tape-stop
+                            default: break;
+                        }
+                        // leave controlState.crossfader frozen → the cut holds steady while dialing
+                    }
+                    else
+                    {
+                        controlState.crossfader.store (x); // normal hysteresis CUT
+                    }
+                    break;
+                }
                 case 18: controlState.volA.store ((float) v / 127.0f); break;       // volume pot A
                 case 19: controlState.volB.store ((float) v / 127.0f); break;       // volume pot B
                 case 20:                                                            // jog: relative delta
@@ -93,9 +157,13 @@ void ScratchAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             const bool pressed = (status == 0x90 && vel > 0); // vel-0 note-on == release
             if (note == 20)
                 controlState.touched.store (pressed); // jog touch
-            else if (pressed && (note == 26 || note == 27 || (note >= 32 && note <= 35)))
-                controlState.togglePlaying(); // Start/Stop taps (26/27) + cue pads (32-35) → toggle play
-            // Back buttons 21-24 and Shift 25 reserved — ARCHITECTURE.md open question 6.
+            else if (note == 25)
+                controlState.shiftHeld.store (pressed); // Shift: held gate for the crossfader layer
+            else if (pressed && (note == 26 || note == 27))
+                controlState.togglePlaying(); // Start/Stop taps (26/27) → toggle play
+            else if (pressed && note >= 32 && note <= 35)
+                controlState.faderMode.store (kCueNoteToMode[note - 32]); // cue pad → mode (hardware-verified)
+            // Back buttons 21-24 reserved — ARCHITECTURE.md open question 6.
         }
     }
 
@@ -150,7 +218,15 @@ void ScratchAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::MemoryOutputStream os (destData, false);
     os.writeInt (kStateMagic);
-    os.writeInt (2); // version 2: sample stored as FLAC (v1 was raw float PCM)
+    os.writeInt (3); // version 3: + shift-layer params; v2 = FLAC sample, v1 = raw float PCM
+
+    // Shift-layer params (v3): the pitch/curve/brake dialed in via Shift+crossfader,
+    // so a reopened song restores the same feel. volA is a live pot the hardware
+    // re-sends, so it is deliberately not persisted.
+    os.writeInt   (controlState.faderMode.load());
+    os.writeFloat (controlState.pitchScale.load());
+    os.writeFloat (controlState.faderCurve.load());
+    os.writeFloat (controlState.brakeScale.load());
 
     auto buf = loadedBuffer;
     if (buf == nullptr)
@@ -191,6 +267,15 @@ void ScratchAudioProcessor::setStateInformation (const void* data, int sizeInByt
     if (is.readInt() != kStateMagic)
         return;
     const int version = is.readInt();
+
+    if (version >= 3) // shift-layer params precede the sample block
+    {
+        controlState.faderMode.store  (is.readInt());
+        controlState.pitchScale.store (is.readFloat());
+        controlState.faderCurve.store (is.readFloat());
+        controlState.brakeScale.store (is.readFloat());
+    }
+
     if (is.readInt() == 0)
         return; // no sample stored
 

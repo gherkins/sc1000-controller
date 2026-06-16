@@ -3,7 +3,7 @@
 ### Reflash your [SC1000](https://github.com/rasteri/SC1000) scratch instrument into a class-compliant USB-MIDI controller 👾
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="The SC1000 plugin — spinning platter, waveform and playhead, crossfader and cue pads" width="380">
+  <img src="docs/screenshot.png" alt="The SC1000 plugin — spinning platter, waveform and playhead, and the crossfader with its shift-layer cue-pad modes (pitch / volume / curve / brake)" width="380">
 </p>
 
 This project is **two parts that work together**:

@@ -37,6 +37,8 @@ public:
     static constexpr double kFaderDecay   = 0.020;  // crossfader cut decay (s) — de-click
     static constexpr double kVolumeGain   = 1.0;    // output level vs |pitch| (firmware VOLUME): ≥1× → full, ~0 stopped
     static constexpr int    kJogDeadband  = 1;      // ignore isolated ±1 jog counts (encoder idle trickle)
+    static constexpr double kCurveSharpKnee = 0.01; // fader travel to reach full at the sharpest curve (≈ hard cut)
+    static constexpr double kPitchTau       = 0.030;// pitch-fader (varispeed) smoothing (s) — de-click step changes
 
     void prepare (double hostSampleRate)
     {
@@ -46,6 +48,7 @@ public:
         dcX.fill (0.0f);
         dcY.fill (0.0f);
         pitch = 0.0;
+        pitchScaleSm = 1.0;
         motorSpeed = 0.0;
         faderVol = 0.0;
         faderOpen = false;
@@ -129,7 +132,9 @@ public:
         }
         else
         {
-            const double dec = (double) n * 48000.0 / (kBrakeSpeed * 10.0 * hostRate);
+            // brakeScale (cue 4) stretches/shortens the tape stop: bigger = longer.
+            const double brakeLen = kBrakeSpeed * (double) cs.brakeScale.load (std::memory_order_relaxed);
+            const double dec = (double) n * 48000.0 / (brakeLen * 10.0 * hostRate);
             motorSpeed = (motorSpeed > dec) ? motorSpeed - dec : 0.0;
         }
 
@@ -156,11 +161,24 @@ public:
         pitch += alpha * (targetPitch - pitch);
         pitch  = juce::jlimit (-20.0, 20.0, pitch); // safety clamp (firmware ±20)
 
-        // --- crossfader CUT (hysteresis + decay); volume pot sets the level ---
+        // --- crossfader CUT (hysteresis + decay); volume pot sets the level. The cut
+        //     curve (cue 3) shapes how much fader travel goes silent→full: sharp =
+        //     near-instant (hard cut, the scratch default), soft = gradual fade. ---
         const double fpos  = cs.crossfader.load (std::memory_order_relaxed);
         const double cutPt = faderOpen ? kFaderClosePt : kFaderOpenPt;
         faderOpen = (fpos >= cutPt);
-        const double faderTarget = faderOpen ? 1.0 : 0.0;
+        double faderTarget;
+        if (! faderOpen)
+        {
+            faderTarget = 0.0; // true silence at the closed edge
+        }
+        else
+        {
+            const double curve = juce::jlimit (0.0, 1.0, (double) cs.faderCurve.load (std::memory_order_relaxed));
+            const double xn    = juce::jlimit (0.0, 1.0, (fpos - kFaderOpenPt) / (1.0 - kFaderOpenPt));
+            const double knee  = kCurveSharpKnee + curve * (1.0 - kCurveSharpKnee); // 0.01 (sharp) .. 1.0 (soft)
+            faderTarget = juce::jmin (1.0, xn / knee);
+        }
         const double fStep = (double) n / (kFaderDecay * hostRate);
         if (std::abs (faderTarget - faderVol) <= fStep) faderVol = faderTarget;
         else                                            faderVol += (faderTarget > faderVol) ? fStep : -fStep;
@@ -178,8 +196,14 @@ public:
         const int    srcCh  = buf->getNumChannels();
         const double pos0   = playhead.load (std::memory_order_relaxed);
 
-        const double rOld = pitchOld * srcRate / hostRate; // src samples / output sample, block start
-        const double rNew = pitch    * srcRate / hostRate; // ...block end
+        // pitch fader (cue 1): a block-smoothed varispeed multiplier on the playback
+        // rate (scales motor + scratch alike, like a turntable pitch slider).
+        const double psTarget = (double) cs.pitchScale.load (std::memory_order_relaxed);
+        const double psAlpha  = 1.0 - std::exp (-(double) n / (kPitchTau * hostRate));
+        pitchScaleSm += psAlpha * (psTarget - pitchScaleSm);
+
+        const double rOld = pitchOld * pitchScaleSm * srcRate / hostRate; // src samples / output sample, block start
+        const double rNew = pitch    * pitchScaleSm * srcRate / hostRate; // ...block end
         const double dr   = (rNew - rOld) / (double) n;
 
         for (int i = 0; i < n; ++i)
@@ -272,6 +296,7 @@ private:
     bool   touchHolding = false; // in the brief coast window after a touch drop-out
     int    holdSamples  = 0;     // samples left in the coast window
     double pitch      = 0.0; // current platter speed (1× units)
+    double pitchScaleSm = 1.0; // smoothed varispeed multiplier (pitch fader, cue 1)
     double motorSpeed = 0.0; // motor target (1 playing, brakes to 0 on stop)
     double faderVol   = 0.0; // smoothed crossfader cut gain
     bool   faderOpen  = false;

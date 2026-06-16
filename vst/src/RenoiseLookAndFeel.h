@@ -23,6 +23,25 @@ namespace renoise
     inline const juce::Colour waveBg    { 0xffd4d4d2 };
     inline const juce::Colour waveTrace { 0xff111111 };
     inline const juce::Colour waveMid   { 0xffb9b9b6 }; // faint centre line
+
+    // Shift-layer crossfader modes (cue 1-4): one colour per role, used to tint the
+    // active cue pad and the fader head while Shift is held.
+    inline const juce::Colour modePitch  { 0xff3d8bff }; // cue 1: pitch  — blue
+    inline const juce::Colour modeVolume { 0xff35c46a }; // cue 2: volume — green
+    inline const juce::Colour modeCurve  { 0xffc861ff }; // cue 3: curve  — magenta
+    inline const juce::Colour modeBrake  { 0xffe23b3b }; // cue 4: brake  — red
+
+    inline juce::Colour modeColour (int mode)
+    {
+        switch (mode)
+        {
+            case 0:  return modePitch;
+            case 1:  return modeVolume;
+            case 2:  return modeCurve;
+            case 3:  return modeBrake;
+            default: return accent;
+        }
+    }
 }
 
 // Flat, beveled, dark buttons with orange when pressed — Renoise's toolbar feel.

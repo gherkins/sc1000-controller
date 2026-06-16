@@ -21,7 +21,7 @@ analysis — is in [`vst/docs/MIDI-MAPPING.md`](../vst/docs/MIDI-MAPPING.md) and
 | Beat prev / next       | back     | PIC `buttons[2]` / `[3]`   | **Note 23 / 24**    | ✅ (added) |
 | Shift button           | front    | IOevent `ACTION_SHIFTON/OFF` | **Note 25** on/off² | ✅ (added) |
 | Start/Stop button      | front    | IOevent `ACTION_STARTSTOP` | **Note 26 / 27** tap³ | ✅ (added) |
-| 4 × cue buttons        | top      | IOevent `ACTION_CUE` (expander pin) | **Note 32 + pin** tap³ | ✅ (added) |
+| 4 × cue buttons        | top      | IOevent `ACTION_CUE` (expander pin) | **Notes 32–35** tap³ | ✅ verified |
 
 ¹ Relative jog = two's-complement 7-bit: `01..3F` = forward, `7F..41` = reverse.
 Maps directly to Mixxx `engine.scratchTick` or a VST playhead velocity.
@@ -32,9 +32,10 @@ released — so the host can read the shift state and implement its own shift la
 ³ **Cue** and **Start/Stop** only get a *press* edge from the firmware (no
 release), so they go out as a momentary **tap**: a note-on (vel 127) immediately
 followed by a note-off. Start/Stop is `26` for deck 0 and `27` for deck 1. Each
-cue button's note is `32 + <expander pin>`, so the four corners land on four
-**stable but pin-dependent** notes somewhere in `32..47` (identify them by ear/eye
-— see below). Pressing a cue **while Shift is held** fires the firmware's
+cue button's note is `32 + <expander pin>`; on the **MK2** the four pads are pins
+0–3 → notes **32–35**, wired (verified live via `host/midimon.swift`) as
+**32 = bottom-left, 33 = top-left, 34 = top-right, 35 = bottom-right** — i.e. *not*
+in cue-number order. Pressing a cue **while Shift is held** fires the firmware's
 *delete-cue* action on the same pin, which emits the **same** note; the host
 distinguishes "set" vs "delete" from the separately-reported Shift state.
 
@@ -62,7 +63,6 @@ Press each back button while watching the monitor (`/tmp/midimon`); note which o
 `90 15`/`16`/`17`/`18` (Notes 21–24) each one sends, then label them in the host
 mapping. Likewise move the crossfader to see whether it drives CC 16 or CC 17.
 
-For the new IO buttons: press **Shift** and confirm `90 19` (Note 25) on press /
-`80 19` on release; tap **Start/Stop** for `90 1A`/`1B` (Note 26/27); then tap
-each of the **4 cue buttons** in turn and record which note in `90 20..2F`
-(Notes 32–47) each corner sends, so you can label the corners in the host map.
+For the new IO buttons (all confirmed live on an SC1000 MK2): **Shift** sends
+`90 19` (Note 25) on press / `80 19` on release; **Start/Stop** sends `90 1B`
+(Note 27); the **4 cue buttons** map to notes 32–35 by corner (note ³).

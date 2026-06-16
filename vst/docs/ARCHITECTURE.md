@@ -9,8 +9,9 @@ marked with the provisional answer the MVP ships.
 
 - **MIDI decode** (`PluginProcessor.cpp`): CC16 crossfader, CC18/19 volumes,
   CC20 relative jog, Note20 touch — from raw bytes, channel-agnostic. **Transport:
-  the Start/Stop taps (Notes 26/27) and the 4 cue pads (Notes 32-35) toggle
-  play/stop** on the press edge. Back buttons 21-24 and Shift 25 reserved.
+  the Start/Stop tap (Note 27) toggles play/stop.** The **4 cue pads (Notes 32–35)
+  select the crossfader's shift-layer mode** and **Shift (Note 25)** gates that
+  layer (see "Crossfader shift layer" below). Back buttons 21–24 reserved.
 - **Scratch engine** (`ScratchEngine.h`): reversible, variable-rate cubic-
   interpolated playback; jog→time via `kPlatterSpeed = 2275`. **Motor model ported
   from the SC1000 firmware** (`player.c`): **touch the platter → jog drives the
@@ -24,18 +25,46 @@ marked with the provisional answer the MVP ships.
   touch-gated — jog without touch is treated as coast, handled by the slip model.)*
 - **Crossfader** (open q4, decided) = firmware-ported **hysteresis CUT** — sharp
   on/off at the closed edge + ~20 ms de-click, *not* a linear fade; the **volume
-  pot CC18** sets the level. Side benefit: immune to the CC16 idle-drift. volB
-  spare (open q5).
+  pot CC18** sets the level. Side benefit: immune to the CC16 idle-drift. The cut
+  **curve** (sharp↔soft) is now adjustable via the shift layer. volB spare (open q5).
 - **Self-contained saving**: the loaded sample is embedded in the plugin state
   chunk — confirmed approach (see below).
 - **GUI** (`PluginEditor.*`): waveform+playhead, spinning platter w/ DJ marker,
   drag-and-drop + file-open loading.
 
-**Not yet done / next:** more hardware tuning of the feel; Shift-layer actions +
-back/cue button assignments beyond transport; latency tuning. Tuning
-knobs (all in `ScratchEngine.h`): `kPlatterSpeed` (scrub speed), `kBrakeSpeed`
-(tape-stop length), `kSlipTau` (slipmat catch-up), `kFaderOpenPt`/`kFaderClosePt`
-(cut point), `kFaderDecay` (cut de-click), and the jog direction (CC20 sign).
+**Not yet done / next:** hardware feel-tuning of the new shift-layer ranges and the
+scratch model; back-button (21–24) assignments; latency tuning. Tuning knobs live in
+`ScratchEngine.h` (scratch/cut/brake feel): `kPlatterSpeed` (scrub speed),
+`kBrakeSpeed` (tape-stop length), `kSlipTau` (slipmat catch-up), `kFaderOpenPt`/
+`kFaderClosePt` (cut point), `kFaderDecay` (cut de-click), `kCurveSharpKnee` (curve
+sharpness), and the jog direction (CC20 sign); the **shift-layer fader→param
+mappings** (`kPitchRange`, `kVolDetent`, `kBrakeMin/Max`, `kCueNoteToMode`) live in
+`PluginProcessor.cpp`.
+
+## Crossfader shift layer (cue-selected modes)
+
+Hold **Shift (Note 25)** and the crossfader stops cutting and instead dials a
+parameter; the **cue pads** pick which (default = pitch). Release Shift → it's the
+scratch CUT again, value retained. Only **Start/Stop (Note 27)** toggles transport
+now. All routing is on the MIDI thread (`PluginProcessor.cpp`); the engine just
+reads the resulting scalars from `ControlState`, and volume mode reuses the existing
+`volA` gain.
+
+| Cue (corner · note) | Mode | Crossfader does |
+|---|---|---|
+| bottom-left · 32  | **pitch**  | ±20% varispeed; snaps to unity across centre ±20% |
+| bottom-right · 35 | **volume** | 0→unity, detent at ~75% (writes `volA`) |
+| top-left · 33     | **curve**  | left = sharp/hard-cut → right = soft fade (Vestax-05 style) |
+| top-right · 34    | **brake**  | tape-stop length, short→long (centre = stock) |
+
+The cue note→mode pairing is **hardware-verified** (the MK2's expander pins aren't
+in cue order — see MIDI-MAPPING.md) via the `kCueNoteToMode` lookup. The dialed
+pitch/curve/brake persist in the plugin state (**v3**).
+
+**UI:** the armed cue pad gets a mode-coloured border; the fader head is neutral
+(orange) at rest and takes the active mode's colour only while Shift is held; a
+bottom-right panel lists all four values, with a caret (▸) marking the active mode
+in its colour.
 
 ## Signal flow (sketch)
 
@@ -149,10 +178,11 @@ in the plugin state.** The sample then travels with the song, reproducing
 Renoise's self-contained `.xrns` feel even though the audio lives inside the
 plugin rather than the native sampler.
 
-The embedded audio is stored as **FLAC** (state version 2 — lossless to 24-bit,
+The embedded audio is stored as **FLAC** (since state version 2 — lossless to 24-bit,
 ~5× smaller than raw float PCM; v1 raw-PCM states still load). It is encoded only
 on save and decoded once on load into the in-RAM PCM buffer the engine reads, so
-realtime scratching is unaffected. The drag limitation (below) only concerns the
+realtime scratching is unaffected. The current **v3** chunk adds the shift-layer
+params (pitch / curve / brake) ahead of the audio. The drag limitation (below) only concerns the
 *initial* load gesture — once loaded by any means, the sample is bundled in the
 song, so dragging *from* Renoise is never required (see the Renoise drag note).
 
@@ -216,14 +246,16 @@ guarantees true scratch feel.
 3. **Inertia/slip** — model platter momentum on release, or keep it simple (stop)?
 
 ### Controls
-4. **Crossfader (CC16)** — gate (hard cut, for transforms/chirps) vs linear gain
-   vs user-assignable? What curve? Does it gate just the scratch voice or a mix?
+4. **Crossfader (CC16)** — ~~gate vs linear vs user-assignable? what curve?~~
+   **DECIDED:** hysteresis **CUT** (gates the single scratch voice); the **curve**
+   (sharp↔soft) is adjustable via the shift layer; volume pot CC18 sets the level.
    (CC17 mirrors CC16 — ignore it.)
-5. **Volume pots (CC18/19)** — what do they control? Master out? Sample level vs a
-   second source? Right now there's only one sample voice, so one may be spare.
-6. **Buttons (Notes 21-24)** — assign to what? Candidates: load next/prev sample,
-   set/jump cue, start/stop, reverse, loop in/out. (Front Start/Shift + cue
-   buttons aren't emitted yet — see MIDI-MAPPING "Not yet emitted".)
+5. **Volume pots (CC18/19)** — **DECIDED:** CC18 = master level (also the target of
+   the shift-layer "volume" mode, via `volA`). CC19 (volB) still spare — one voice.
+6. **Buttons** — ~~assign to what?~~ **DECIDED (front controls):** Start/Stop (27)
+   = transport; cue pads (32–35) = crossfader shift-layer mode select; Shift (25)
+   = the layer gate (see "Crossfader shift layer"). *Still open:* the 4 back buttons
+   (Notes 21–24) — candidates: load next/prev sample, cue points, reverse, loop.
 
 ### Sample & musical features
 7. **Sample slots** — single sample, or multiple banks/slots switchable by buttons?
