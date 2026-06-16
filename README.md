@@ -1,22 +1,21 @@
 # SC1000 Midi Controller
 
-**Reflash a [SC1000](https://github.com/rasteri/SC1000) scratch instrument into a
-class-compliant USB-MIDI controller 👾
+### Reflash your [SC1000](https://github.com/rasteri/SC1000) scratch instrument into a class-compliant USB-MIDI controller 👾
 
 <p align="center">
   <img src="docs/screenshot.png" alt="The SC1000 plugin — spinning platter, waveform and playhead, crossfader and cue pads" width="380">
 </p>
 
-SC1000 Midi Controller is **two parts that work together**:
+This project is **two parts that work together**:
 
+- **The controller firmware** — turns an SC1000 hardware scratch instrument into a
+  plug-and-play **USB-MIDI controller**: its jog wheel, crossfader, volume pots and
+  buttons stream as MIDI over one USB cable (which also powers it — no soldering).
 - **The plugin** (macOS) — drop any sample onto it and scratch it like a record:
   variable-rate, reversible playback driven by a jog wheel and gated by the
   crossfader, with the spinning platter and waveform the hardware itself lacks.
   Runs as an **AU plugin** (Renoise, Logic, any AU host) or a **standalone app**.
-- **The controller firmware** — turns an SC1000 hardware scratch instrument into a
-  plug-and-play **USB-MIDI controller**: its jog wheel, crossfader, volume pots and
-  buttons stream as MIDI over one USB cable (which also powers it — no soldering).
-
+  
 Use either on its own — the plugin works with any controller sending the same MIDI,
 the firmware works with any MIDI software — but together they're a complete,
 1-cable scratch setup.
