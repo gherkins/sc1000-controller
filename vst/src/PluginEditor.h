@@ -266,7 +266,7 @@ private:
         }
     }
 
-    float headDisplay = 1.0f; // smoothed fader-head position (matches faderRaw default)
+    float headDisplay = 0.5f; // smoothed fader-head position (matches faderRaw default: centre)
     ScratchAudioProcessor& proc;
 };
 

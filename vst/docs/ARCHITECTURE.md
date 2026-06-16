@@ -23,10 +23,15 @@ marked with the provisional answer the MVP ships.
   directions, seamless cubic across the boundary — q10 decided; toggle via
   `ScratchEngine::setLoop`, default on). One voice. *(Note: scratch is now
   touch-gated — jog without touch is treated as coast, handled by the slip model.)*
-- **Crossfader** (open q4, decided) = firmware-ported **hysteresis CUT** — sharp
-  on/off at the closed edge + ~20 ms de-click, *not* a linear fade; the **volume
+- **Crossfader** (open q4, decided) = firmware-ported **double-cut (centre-open)** —
+  full at the centre, silent at **both** edges, with hysteresis + ~20 ms de-click,
+  *not* a linear fade. This is the SC1000 "battle" fader: you cut toward either end
+  rather than mixing between two decks. Driven by distance from centre
+  (`c = 1 − 2·|fpos − 0.5|`) through the same hysteresis/curve/decay; the **volume
   pot CC18** sets the level. Side benefit: immune to the CC16 idle-drift. The cut
-  **curve** (sharp↔soft) is now adjustable via the shift layer. volB spare (open q5).
+  **curve** (sharp↔soft) is adjustable via the shift layer — sharp = full across
+  nearly all travel (hard cut only at the very edges), soft = a gradual tent from
+  the centre outward. volB spare (open q5).
 - **Self-contained saving**: the loaded sample is embedded in the plugin state
   chunk — confirmed approach (see below).
 - **GUI** (`PluginEditor.*`): waveform+playhead, spinning platter w/ DJ marker,
@@ -54,7 +59,7 @@ reads the resulting scalars from `ControlState`, and volume mode reuses the exis
 |---|---|---|
 | bottom-left · 32  | **pitch**  | ±20% varispeed; snaps to unity across centre ±20% |
 | bottom-right · 35 | **volume** | 0→unity, detent at ~75% (writes `volA`) |
-| top-left · 33     | **curve**  | left = sharp/hard-cut → right = soft fade (Vestax-05 style) |
+| top-left · 33     | **curve**  | centre→edge falloff: left = sharp/hard-cut → right = soft tent (Vestax-05 style) |
 | top-right · 34    | **brake**  | tape-stop length, short→long (centre = stock) |
 
 The cue note→mode pairing is **hardware-verified** (the MK2's expander pins aren't
@@ -247,9 +252,11 @@ guarantees true scratch feel.
 
 ### Controls
 4. **Crossfader (CC16)** — ~~gate vs linear vs user-assignable? what curve?~~
-   **DECIDED:** hysteresis **CUT** (gates the single scratch voice); the **curve**
-   (sharp↔soft) is adjustable via the shift layer; volume pot CC18 sets the level.
-   (CC17 mirrors CC16 — ignore it.)
+   **DECIDED:** **double-cut (centre-open)** — full at the centre, silent at both
+   edges (gates the single scratch voice; cut toward either end, SC1000-firmware
+   default); the **curve** (sharp↔soft) is adjustable via the shift layer and shapes
+   the centre→edge falloff; volume pot CC18 sets the level. (CC17 mirrors CC16 —
+   ignore it.)
 5. **Volume pots (CC18/19)** — **DECIDED:** CC18 = master level (also the target of
    the shift-layer "volume" mode, via `volA`). CC19 (volB) still spare — one voice.
 6. **Buttons** — ~~assign to what?~~ **DECIDED (front controls):** Start/Stop (27)

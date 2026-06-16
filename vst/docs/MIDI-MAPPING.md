@@ -26,7 +26,7 @@ configurable; don't hard-filter on channel 1.
 
 | # | Control | Message | Range / encoding |
 |---|---|---|---|
-| CC **16** (`0x10`) | **Crossfader** | Control Change | 0–127 absolute |
+| CC **16** (`0x10`) | **Crossfader** | Control Change | 0–127 absolute (plugin: double-cut, centre-open — full at 64, silent at 0/127) |
 | CC **17** (`0x11`) | Crossfader (2nd ADC channel) | Control Change | 0–127 — **mirrors CC16** (see quirks) |
 | CC **18** (`0x12`) | Volume pot A (sample, back) | Control Change | 0–127 absolute |
 | CC **19** (`0x13`) | Volume pot B (beat, back) | Control Change | 0–127 absolute |

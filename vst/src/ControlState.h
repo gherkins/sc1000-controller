@@ -7,11 +7,12 @@
 // atomics are sufficient. See docs/MIDI-MAPPING.md for the device contract.
 struct ControlState
 {
-    // Crossfader (CC16): 0..1. Default fully open so audio passes before it's touched.
-    // While Shift is held this freezes (the cut holds) and the fader drives a param
-    // instead; faderRaw still tracks the live physical position for the GUI head.
-    std::atomic<float> crossfader { 1.0f };
-    std::atomic<float> faderRaw   { 1.0f };
+    // Crossfader (CC16): 0..1. Double-cut (centre-open): full at the centre, silent at
+    // both edges — so the default sits at centre (0.5) and audio passes before it's
+    // touched. While Shift is held this freezes (the cut holds) and the fader drives a
+    // param instead; faderRaw still tracks the live physical position for the GUI head.
+    std::atomic<float> crossfader { 0.5f };
+    std::atomic<float> faderRaw   { 0.5f };
 
     // Volume pots (CC18 / CC19): 0..1. volA drives master out for the MVP; volB is
     // spare (only one voice today — see ARCHITECTURE.md open question 5).

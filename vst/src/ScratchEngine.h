@@ -19,9 +19,10 @@
 //    firmware `slippiness`).
 //  • Stop               → the motor brakes from 1× to 0 over ~0.6 s = tape stop
 //    (firmware `brakespeed`).
-//  • Crossfader         → a hysteresis CUT (not a linear fade): full off only at
-//    the closed edge, with a ~20 ms de-click decay (firmware fader). The volume
-//    pot (CC18) sets the level.
+//  • Crossfader         → a double-cut (centre-open, not a linear fade): full at the
+//    centre, silent at BOTH edges — the SC1000 "battle" fader where you cut toward
+//    either end rather than mixing between two decks. ~20 ms de-click decay; the
+//    curve (cue 3) shapes the falloff and the volume pot (CC18) sets the level.
 //
 // A one-pole DC blocker keeps a stationary platter silent and de-clicks.
 class ScratchEngine
@@ -32,8 +33,8 @@ public:
     static constexpr double kTouchDebounce= 0.040;  // coast window after a touch drop (s) — rides flicker, then slips to motor
     static constexpr double kBrakeSpeed   = 3000.0; // firmware brakespeed — bigger = longer tape stop
     static constexpr double kSlipTau      = 0.050;  // slipmat time constant (s) — platter eases to motor
-    static constexpr double kFaderOpenPt  = 0.010;  // crossfader cut: opens above this (0..1)
-    static constexpr double kFaderClosePt = 0.004;  // ...closes below this (hysteresis)
+    static constexpr double kFaderOpenPt  = 0.010;  // double-cut: opens when centre-distance exceeds this
+    static constexpr double kFaderClosePt = 0.004;  // ...closes below this (hysteresis, near each edge)
     static constexpr double kFaderDecay   = 0.020;  // crossfader cut decay (s) — de-click
     static constexpr double kVolumeGain   = 1.0;    // output level vs |pitch| (firmware VOLUME): ≥1× → full, ~0 stopped
     static constexpr int    kJogDeadband  = 1;      // ignore isolated ±1 jog counts (encoder idle trickle)
@@ -161,21 +162,25 @@ public:
         pitch += alpha * (targetPitch - pitch);
         pitch  = juce::jlimit (-20.0, 20.0, pitch); // safety clamp (firmware ±20)
 
-        // --- crossfader CUT (hysteresis + decay); volume pot sets the level. The cut
-        //     curve (cue 3) shapes how much fader travel goes silent→full: sharp =
-        //     near-instant (hard cut, the scratch default), soft = gradual fade. ---
+        // --- crossfader DOUBLE-CUT (centre-open, hysteresis + decay); volume pot sets
+        //     the level. Driven by distance from centre: c = 1 at the centre, 0 at
+        //     BOTH edges, so a cut fires toward either end (the SC1000 battle fader) —
+        //     not a side-to-side fade between decks. The curve (cue 3) shapes the
+        //     falloff: sharp = full across nearly all travel, hard cut only at the very
+        //     edges; soft = a gradual tent from the centre outward. ---
         const double fpos  = cs.crossfader.load (std::memory_order_relaxed);
+        const double c     = 1.0 - 2.0 * std::abs (fpos - 0.5); // 1 = centre, 0 = either edge
         const double cutPt = faderOpen ? kFaderClosePt : kFaderOpenPt;
-        faderOpen = (fpos >= cutPt);
+        faderOpen = (c >= cutPt);
         double faderTarget;
         if (! faderOpen)
         {
-            faderTarget = 0.0; // true silence at the closed edge
+            faderTarget = 0.0; // true silence at either edge
         }
         else
         {
             const double curve = juce::jlimit (0.0, 1.0, (double) cs.faderCurve.load (std::memory_order_relaxed));
-            const double xn    = juce::jlimit (0.0, 1.0, (fpos - kFaderOpenPt) / (1.0 - kFaderOpenPt));
+            const double xn    = juce::jlimit (0.0, 1.0, (c - kFaderOpenPt) / (1.0 - kFaderOpenPt));
             const double knee  = kCurveSharpKnee + curve * (1.0 - kCurveSharpKnee); // 0.01 (sharp) .. 1.0 (soft)
             faderTarget = juce::jmin (1.0, xn / knee);
         }
