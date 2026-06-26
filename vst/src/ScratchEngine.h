@@ -7,6 +7,8 @@
 #include <memory>
 
 #include "ControlState.h"
+#include "TouchGate.h"
+#include "TraceLog.h"
 
 // Variable-rate, reversible sample playback driven by the jog — the "treat a
 // sample like vinyl" core. The motor/slipmat/brake model and the crossfader cut
@@ -30,9 +32,9 @@ class ScratchEngine
 public:
     static constexpr double kPlatterSpeed = 2275.0; // jog counts per audio-second (≈ 33 rpm)
     static constexpr double kScratchTau   = 0.020;  // jog→pitch smoothing (s) — kills per-block MIDI jitter
-    static constexpr double kTouchDebounce= 0.040;  // coast window after a touch drop (s) — rides flicker, then slips to motor
+    static constexpr double kTouchReleaseHold = 0.020; // brief hold that rides scratch reversals / cap flicker before snapping to the motor (s)
     static constexpr double kBrakeSpeed   = 3000.0; // firmware brakespeed — bigger = longer tape stop
-    static constexpr double kSlipTau      = 0.050;  // slipmat time constant (s) — platter eases to motor
+    static constexpr double kSlipTau      = 0.012;  // "stick slipmat" catch time (s) — how fast release snaps to the motor (smaller = stiffer/instant)
     static constexpr double kFaderOpenPt  = 0.010;  // double-cut: opens when centre-distance exceeds this
     static constexpr double kFaderClosePt = 0.004;  // ...closes below this (hysteresis, near each edge)
     static constexpr double kFaderDecay   = 0.020;  // crossfader cut decay (s) — de-click
@@ -53,10 +55,15 @@ public:
         motorSpeed = 0.0;
         faderVol = 0.0;
         faderOpen = false;
-        touchActive = false;
-        touchHolding = false;
-        holdSamples = 0;
+        touchGate.releaseHoldSec = kTouchReleaseHold;
+        touchGate.configure (hostRate);
+        touchGate.reset();
     }
+
+    // Debug capture (off unless SC1000_TRACE is set — see TraceLog.h). enableTrace
+    // pre-reserves off the audio thread; dumpTrace writes the CSV on teardown.
+    void enableTrace (const std::string& path) { traceLog.enable (path, hostRate); }
+    void dumpTrace()                           { traceLog.dump(); }
 
     void setSample (std::shared_ptr<juce::AudioBuffer<float>> buf, double srcRate)
     {
@@ -108,25 +115,9 @@ public:
         const int rawJog = cs.consumeJog();
         const int jog    = (std::abs (rawJog) <= kJogDeadband) ? 0 : rawJog;
 
-        // --- touch with a short coast-debounce ---
-        // Jog movement is deliberately NOT used as a touch proxy: the light platter
-        // coasts (and the encoder picks up vibration) after release, so using it would
-        // let that momentum keep driving playback — the record "flies" forward/back
-        // instead of catching the motor. Instead, when touch drops we hold the platter
-        // speed for a brief window: a real re-touch resumes the scratch seamlessly; if
-        // the window expires it was a genuine release and we slip to the motor. Touch
-        // is the continuous CC21 level from the ≥CC firmware build, so it gates cleanly.
-        // KNOWN LIMITATION: the pad drops touch ~200–500 ms on *forward* pushes (PIC
-        // sensor, not fixable host-side), so the motor can briefly take back over mid-
-        // scratch. Accepted tradeoff vs the post-release coast "fly" — raising
-        // kTouchDebounce trades a longer release tail for fewer takeovers. See
-        // docs/ARCHITECTURE.md "Touch sensing — forward-push dropout".
-        const bool rawTouch = cs.touched.load (std::memory_order_relaxed);
-        if (rawTouch)                            { touchActive = true; touchHolding = false; }
-        else if (touchActive && ! touchHolding)  { touchHolding = true; holdSamples = (int) (kTouchDebounce * hostRate); }
-        else if (touchHolding)                   { holdSamples -= n; if (holdSamples <= 0) { touchHolding = false; touchActive = false; } }
-
         // --- virtual motor: 1× when playing; brakes to 0 on stop (tape stop) ---
+        // Computed BEFORE the touch gate because the gate needs to know whether the
+        // motor is driving the platter (firmware: a stopped motor ⇒ the jog scrubs).
         if (playing)
         {
             motorSpeed = 1.0;
@@ -138,21 +129,32 @@ public:
             const double dec = (double) n * 48000.0 / (brakeLen * 10.0 * hostRate);
             motorSpeed = (motorSpeed > dec) ? motorSpeed - dec : 0.0;
         }
+        const bool motorStopped = motorSpeed < 1.0e-6; // motor not driving the platter
 
-        // --- platter speed: scratch → follow jog; brief touch drop → hold speed;
-        //     released → slip toward the motor (the coast is NOT followed). ---
+        // --- touch gate (TouchGate.h): the capacitive bit (CC21/Note20) alone is a
+        // noisy single bit — it drops on forward pushes and false-fires at rest. The
+        // gate ports the firmware's robust decision (follow the jog when touched OR
+        // when the motor is idle), rejects at-rest false positives while playing, and
+        // rides brief drops so a scratch doesn't hand back to the motor mid-stroke.
+        // See TouchGate.h and docs/ARCHITECTURE.md "Touch sensing".
+        const bool rawTouch = cs.touched.load (std::memory_order_relaxed);
+        const TouchGate::Mode touchMode = touchGate.process (n, rawTouch, jog, motorStopped);
+
+        // --- platter speed: scratch → follow the jog (incl. bridging a cap dropout);
+        //     coast → hold speed (let-go settling — don't chase the platter to a stop);
+        //     released → slip toward the motor. ---
         double targetPitch, tau;
-        if (touchActive && ! touchHolding)        // scratching: follow the jog
+        if (touchMode == TouchGate::Mode::Scratch)        // scratching: follow the jog
         {
             targetPitch = (base1x > 1.0e-9) ? ((double) jog / kPlatterSpeed * srcRate) / base1x : 0.0;
             tau = kScratchTau;
         }
-        else if (touchHolding)                    // brief drop-out: coast (hold speed)
+        else if (touchMode == TouchGate::Mode::Coast)     // settling after let-go: hold momentum
         {
             targetPitch = pitch;
             tau = kScratchTau;
         }
-        else                                      // released: slip toward the motor
+        else                                              // released: slip toward the motor
         {
             targetPitch = motorSpeed;
             tau = kSlipTau;
@@ -237,6 +239,16 @@ public:
         newPos = loop ? wrap (newPos, srcLen)
                       : juce::jlimit (0.0, (double) (srcLen - 1), newPos);
         playhead.store (newPos, std::memory_order_relaxed);
+
+        // --- debug capture: firmware stream + this block's decision, time-aligned ---
+        if (traceLog.enabled())
+        {
+            const int modeInt = (touchMode == TouchGate::Mode::Scratch) ? 1
+                              : (touchMode == TouchGate::Mode::Coast)   ? 2 : 0;
+            traceLog.push ({ traceLog.stamp (n), n, rawJog, jog, rawTouch ? 1 : 0,
+                             playing ? 1 : 0, motorSpeed, motorStopped ? 1 : 0, modeInt,
+                             touchGate.isEngaged() ? 1 : 0, pitch, getPlayheadSeconds() });
+        }
     }
 
 private:
@@ -297,12 +309,12 @@ private:
     std::array<float, 8> dcY {};
 
     // Motor / slipmat / crossfader-cut / touch state (audio thread only).
-    bool   touchActive  = false; // capacitive touch latched (scratching)
-    bool   touchHolding = false; // in the brief coast window after a touch drop-out
-    int    holdSamples  = 0;     // samples left in the coast window
+    TouchGate touchGate;     // decides scratch vs. release from the cap bit + motor + jog
     double pitch      = 0.0; // current platter speed (1× units)
     double pitchScaleSm = 1.0; // smoothed varispeed multiplier (pitch fader, cue 1)
     double motorSpeed = 0.0; // motor target (1 playing, brakes to 0 on stop)
     double faderVol   = 0.0; // smoothed crossfader cut gain
     bool   faderOpen  = false;
+
+    TraceLog traceLog; // debug capture (off unless SC1000_TRACE set)
 };

@@ -15,6 +15,12 @@ vst/build/
 # local Claude Code instructions — stays local, not committed
 /CLAUDE.md
 
+# debug capture (make trace / trace-replay) — local diagnostic data, not committed
+/trace.csv
+/traces/
+*.trace.csv
+*.new.csv
+
 # macOS
 .DS_Store
 

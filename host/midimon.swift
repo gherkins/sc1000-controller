@@ -4,6 +4,14 @@
 import CoreMIDI
 import Foundation
 
+// Monotonic seconds since launch, prefixed on every line so a raw-MIDI capture can
+// be lined up against a plugin trace (make trace) when diagnosing jog touch.
+let t0 = DispatchTime.now().uptimeNanoseconds
+func stamp() -> String {
+    let s = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000_000.0
+    return String(format: "%8.4f", s)
+}
+
 var client = MIDIClientRef()
 MIDIClientCreate("scmon" as CFString, nil, nil, &client)
 
@@ -16,7 +24,7 @@ MIDIInputPortCreateWithBlock(client, "scin" as CFString, &inPort) { (pktList, _)
         withUnsafeBytes(of: packet.pointee.data) { raw in
             var s = ""
             for i in 0..<len { s += String(format: "%02X ", raw[i]) }
-            print("MIDI: \(s)")
+            print("\(stamp()) MIDI: \(s)")
         }
     }
     fflush(stdout)

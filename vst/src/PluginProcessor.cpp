@@ -90,11 +90,14 @@ ScratchAudioProcessor::ScratchAudioProcessor()
                                 .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
     formatManager.registerBasicFormats();
+    tracePath = juce::SystemStats::getEnvironmentVariable ("SC1000_TRACE", {}); // debug capture (see TraceLog.h)
 }
 
 void ScratchAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerBlock*/)
 {
     engine.prepare (sampleRate);
+    if (tracePath.isNotEmpty())
+        engine.enableTrace (tracePath.toStdString());
 }
 
 void ScratchAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)

@@ -14,6 +14,8 @@ AU      := $(ART)/AU/SC1000.component
 APP     := $(ART)/Standalone/SC1000.app
 DIST    := dist
 SHOTPNG := docs/screenshot.png
+APPBIN  := $(APP)/Contents/MacOS/SC1000
+TRACE   ?= $(CURDIR)/trace.csv
 
 # Binaries are published to an orphan branch (force-pushed, single commit) instead
 # of main's history, so cloning main stays lean and the repo size stays bounded.
@@ -21,7 +23,7 @@ ARTBRANCH := artifacts
 ARTFILES  := SC1000-AU-latest.zip SC1000-Standalone-latest.zip sc1000-firmware-latest.zip
 
 .DEFAULT_GOAL := help
-.PHONY: help vst vst-debug auval shot standalone firmware stock dist publish clean
+.PHONY: help vst vst-debug auval shot standalone touchtest trace trace-analyze trace-replay firmware stock dist publish clean
 
 help: ## Show this help
 	@echo "SC1000 Midi Controller — make targets:"
@@ -45,6 +47,32 @@ shot: vst ## Render a fresh plugin screenshot to docs/screenshot.png
 
 standalone: vst ## Launch the Standalone app
 	open "$(APP)"
+
+trace: vst ## Capture a debug trace: run Standalone w/ logging → trace.csv (load a sample, scratch, then QUIT to flush)
+	@echo "==> recording to $(TRACE)"
+	@echo "    Load a sample, run the scenarios (let it run + grab/back-spin; let it run + don't touch;"
+	@echo "    stop + nudge by hand), then QUIT the app (Cmd-Q) to flush the CSV."
+	@SC1000_TRACE="$(TRACE)" "$(APPBIN)" || true
+	@echo "==> wrote $(TRACE)"
+
+trace-analyze: ## Analyse a captured trace for touch mis-decisions (TRACE=path, default trace.csv)
+	@python3 $(VST)/tools/trace_analyze.py "$(TRACE)"
+
+trace-replay: ## Replay a capture through the CURRENT gate + re-analyse (TRACE=path, RELEASE_HOLD=secs)
+	@SDK="$$(xcrun --show-sdk-path)"; WRAP=""; \
+	printf '#include <algorithm>\nint main(){return 0;}\n' | clang++ -x c++ -std=c++17 -fsyntax-only - 2>/dev/null \
+		|| WRAP="-nostdinc++ -isystem $$SDK/usr/include/c++/v1"; \
+	clang++ -std=c++17 $$WRAP -I$(VST)/src $(VST)/test/trace_replay.cpp -o $(VST)/build/trace_replay \
+		&& $(VST)/build/trace_replay "$(TRACE)" "$(TRACE).new.csv" $(RELEASE_HOLD) \
+		&& python3 $(VST)/tools/trace_analyze.py "$(TRACE).new.csv"
+
+touchtest: ## Build + run the TouchGate unit test (no JUCE, scratch-feel regression guard)
+	@SDK="$$(xcrun --show-sdk-path)"; \
+	WRAP=""; \
+	printf '#include <algorithm>\nint main(){return 0;}\n' | clang++ -x c++ -std=c++17 -fsyntax-only - 2>/dev/null \
+		|| WRAP="-nostdinc++ -isystem $$SDK/usr/include/c++/v1"; \
+	clang++ -std=c++17 $$WRAP -I$(VST)/src $(VST)/test/touchgate_test.cpp -o $(VST)/build/touchgate_test \
+		&& $(VST)/build/touchgate_test
 
 ## ---- controller firmware ----
 

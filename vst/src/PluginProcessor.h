@@ -14,7 +14,7 @@ class ScratchAudioProcessor : public juce::AudioProcessor
 {
 public:
     ScratchAudioProcessor();
-    ~ScratchAudioProcessor() override = default;
+    ~ScratchAudioProcessor() override { engine.dumpTrace(); } // flush SC1000_TRACE capture, if any
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -63,6 +63,8 @@ private:
     double       loadedRate = 0.0;
     juce::String sampleName;
     std::atomic<int> sampleGeneration { 0 };
+
+    juce::String tracePath; // SC1000_TRACE env (debug block capture); empty = off
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ScratchAudioProcessor)
 };

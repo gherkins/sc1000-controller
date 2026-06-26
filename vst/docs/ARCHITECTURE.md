@@ -21,8 +21,9 @@ marked with the provisional answer the MVP ships.
   Transport toggled by the cue / Start buttons. A DC blocker keeps a stationary
   platter silent + de-clicks. Idle-trickle ±1 suppressed. Ends **loop** (wrap both
   directions, seamless cubic across the boundary — q10 decided; toggle via
-  `ScratchEngine::setLoop`, default on). One voice. *(Note: scratch is now
-  touch-gated — jog without touch is treated as coast, handled by the slip model.)*
+  `ScratchEngine::setLoop`, default on). One voice. *(Touch is gated through
+  `TouchGate.h` — ported from the firmware's `capIsTouched || motor_speed == 0`
+  decision; see "Touch sensing" below.)*
 - **Crossfader** (open q4, decided) = firmware-ported **double-cut (centre-open)** —
   full at the centre, silent at **both** edges, with hysteresis + ~20 ms de-click,
   *not* a linear fade. This is the SC1000 "battle" fader: you cut toward either end
@@ -114,35 +115,82 @@ Matching this gives the same feel as the hardware. Reverse comes for free (negat
 deltas). The audio engine resamples between the previous and new playhead each
 block; rate (and direction) = (Δplayhead / blockDuration).
 
-## Touch sensing — forward-push dropout (known hardware limitation)
+## Touch sensing — the gate (`TouchGate.h`)
 
-Measured live (via the continuous CC21 touch level — see MIDI-MAPPING.md — and a
-decoding monitor): **the capacitive pad reliably drops touch for ~200–500 ms during
-the *forward push* of a scratch, while holding solid on the backward pull.** It is
-not MIDI loss or flicker — the underlying sensor bit itself reads 0. The touch line
-is a single bit straight from the PIC (`sc_input.c`: `capIsTouched = (result >> 4 &
-0x01)`); there is **no sensitivity / threshold / hysteresis in the Linux firmware**
-to tune — that logic lives in the PIC microcontroller (separate, not in either repo).
+The capacitive pad is a single noisy bit straight from the PIC (`sc_input.c`:
+`capIsTouched = (result >> 4 & 0x01)`, shipped as CC21 + Note20). There is **no
+sensitivity / threshold / hysteresis in the Linux firmware** to tune — that logic
+lives in the PIC microcontroller (separate, not in either repo). It is **not** usable
+as the sole scratch gate, and a 107 s capture (`make trace`, analysed by
+`trace_replay`) said exactly how badly:
 
-This creates an **irreducible tradeoff** for the host engine, because a 300 ms
-forward-push dropout (touch off, jog moving) is indistinguishable from a post-release
-**coast** (touch off, jog moving):
+```
+cap-on rate:   backward pull 91%    forward push 58%    (the bit drops on the push)
+66 forward-push dropouts mid-scratch, median 203 ms, up to ~1.16 s,
+   with the jog CLEARLY still moving the whole time
+only 4 genuine let-gos — and on a let-go the light platter settles
+   (jog → 0) within ~21 ms
+```
 
-- **Bridge the dropout** (jog-as-touch-proxy, a long coast window, or a firmware
-  `capIsTouched` debounce) → scratches never break, but the same bridge lets the
-  light platter's coast keep driving playback after you let go — the record "flies"
-  forward / drifts back instead of catching the motor.
-- **Don't bridge it** (gate purely on touch) → release is clean, but the motor takes
-  back over mid-scratch on the longest forward-push dropouts.
+So gating on the cap bit handed control back to the motor in the middle of 58
+scratches in that capture ("it keeps running while I scratch"). The decisive insight:
+**during a scratch the reliable signal is the jog, not the cap bit** — and on a real
+let-go the platter stops almost instantly, so the "coast-fly" an earlier design feared
+(and used to justify *not* bridging) barely exists.
 
-No coast-window value threads the needle. **Decision: gate on touch only** (clean
-release is the priority; the jog is deliberately *not* used as a touch proxy — see
-the engine comment and git history). The `kTouchDebounce` window (40 ms) holds the
-platter *speed* through brief drops, which on a forward push roughly continues the
-push; raising it trades a longer release tail for fewer takeovers (the lever if this
-is revisited). The only real fix — making touch not drop during scratching — is at
-the **PIC capacitive sensing** level (sensitivity / hysteresis), a separate firmware
-and a bigger job. Accepted as a known limitation for now.
+**The "stick slipmat" model — follow the jog only while actively scratching; otherwise
+snap to the motor.** Two hardware facts forced this: the cap **lingers on for up to ~1 s
+after you lift** (so it can't gate release), and the light platter **keeps creeping**
+after you let go. Honouring the platter's leftover momentum (a real slipmat) therefore
+reads as a sluggish drag / dead stillstand before the motor catches. Decision (user
+call): give up the "push it forward and let it ride" trick; make **release reliably mean
+"play the sample."** So `TouchGate` (JUCE-free, unit-tested in `test/touchgate_test.cpp`
+[`make touchtest`]) follows the jog only when:
+
+- **motor stopped** — a dead record you cue by hand (so "not running recognises touch
+  without touching" is correct by design), or
+- **cap on AND the platter is moving** — you're actively scratching.
+
+Anything else — a lift, a stop, or a coasting platter (even with the cap still reading
+on) — **slips to the motor**, *stiffly* (`kSlipTau` ≈ 12 ms, a "sticky" catch that snaps
+to 1× rather than coasting). A short hold (**Coast**, `kTouchReleaseHold` 20 ms) rides
+scratch reversals and brief cap flicker before committing to the slip.
+
+This drops the earlier *strong-jog bridge* (which followed fast cap-off motion): that was
+exactly the momentum-ride the stick slipmat removes. Net: scratching is unaffected (it's
+cap-on + moving), and every release snaps to 1× in ~30–40 ms regardless of how fast the
+platter was moving. **Tape-stop** is still available as a *slow-down* (cap on +
+decelerating jog → follows it down); once stopped it returns to the motor (no indefinite
+hold — that would need a separate control, since a still platter can't be told apart from
+a lift with the cap lingering).
+
+Validated on real captures: stillstand-on-release gone, release snaps to the motor
+without riding momentum, baby/slow scratching still follows. Tunables at the top of
+`ScratchEngine.h`: `kSlipTau` (catch stiffness — smaller = snappier) and
+`kTouchReleaseHold` (reversal/flicker ride). Re-tune against a fresh capture with
+`make trace-replay TRACE=trace.csv RELEASE_HOLD=<secs>` then `trace-analyze`.
+
+### Diagnosing on hardware — the trace capture
+
+Touch *feel* only confirms on a real SC1000, so the plugin can log the raw inputs
+and its own decisions for offline pattern-matching. Set `SC1000_TRACE=<path>` (read
+in `PluginProcessor`) and every audio block appends one row — the firmware stream as
+decoded (`rawTouch`, `jog`, `playing`) next to the gate's decision (`mode`, `motor`,
+`pitch`, `playhead`) — via the realtime-safe `TraceLog` (pre-reserved buffer, flushed
+to CSV on teardown). One file, one clock, so firmware stream and plugin behaviour are
+already aligned.
+
+```sh
+make trace          # runs the Standalone with logging → trace.csv; scratch, then QUIT to flush
+make trace-analyze  # classifies every mis-decision window
+```
+
+`tools/trace_analyze.py` is the payoff: for each "motor kept running while I moved"
+window it reports whether the **cap bit was firing** — splitting a **gate bug**
+(fixable in `TouchGate.h`) from a **hardware dropout** (PIC cap-sense, not fixable
+host-side) — plus stationary-touch halts (symptom 2) and at-rest cap noise (symptom
+3) and a histogram of forward-push dropout durations. `host/midimon.swift` (now
+timestamped) is an independent raw-MIDI cross-check.
 
 ## Recommended stack
 
