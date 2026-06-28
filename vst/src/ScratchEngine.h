@@ -32,7 +32,7 @@ class ScratchEngine
 public:
     static constexpr double kPlatterSpeed = 2275.0; // jog counts per audio-second (≈ 33 rpm)
     static constexpr double kScratchTau   = 0.020;  // jog→pitch smoothing (s) — kills per-block MIDI jitter
-    static constexpr double kTouchReleaseHold = 0.020; // brief hold that rides scratch reversals / cap flicker before snapping to the motor (s)
+    static constexpr double kTouchReleaseHold = 0.020; // brief hold that rides a cap-off flicker (a blip vs a real lift) before snapping to the motor (s)
     static constexpr double kBrakeSpeed   = 3000.0; // firmware brakespeed — bigger = longer tape stop
     static constexpr double kSlipTau      = 0.012;  // "stick slipmat" catch time (s) — how fast release snaps to the motor (smaller = stiffer/instant)
     static constexpr double kFaderOpenPt  = 0.010;  // double-cut: opens when centre-distance exceeds this
@@ -131,18 +131,19 @@ public:
         }
         const bool motorStopped = motorSpeed < 1.0e-6; // motor not driving the platter
 
-        // --- touch gate (TouchGate.h): the capacitive bit (CC21/Note20) alone is a
-        // noisy single bit — it drops on forward pushes and false-fires at rest. The
-        // gate ports the firmware's robust decision (follow the jog when touched OR
-        // when the motor is idle), rejects at-rest false positives while playing, and
-        // rides brief drops so a scratch doesn't hand back to the motor mid-stroke.
-        // See TouchGate.h and docs/ARCHITECTURE.md "Touch sensing".
+        // --- touch gate (TouchGate.h): the capacitive bit (CC21/Note20) is a single
+        // noisy bit, but it reads reliably ON through a backward pull and OFF on a real
+        // lift, so finger-on alone drives the decision: follow the jog whenever touched
+        // (moving ⇒ scratch, still ⇒ ease the record to a stop) or when the motor is idle,
+        // and hand back to the motor only on a real lift (cap off) — a short hold rides a
+        // brief cap-off flicker. See TouchGate.h and docs/ARCHITECTURE.md "Touch sensing".
         const bool rawTouch = cs.touched.load (std::memory_order_relaxed);
         const TouchGate::Mode touchMode = touchGate.process (n, rawTouch, jog, motorStopped);
 
-        // --- platter speed: scratch → follow the jog (incl. bridging a cap dropout);
-        //     coast → hold speed (let-go settling — don't chase the platter to a stop);
-        //     released → slip toward the motor. ---
+        // --- platter speed: scratch → follow the jog (finger on; still jog ⇒ target 0, so
+        //     a held platter eases to a stop rather than fighting the motor);
+        //     coast → hold speed briefly (riding a cap-off flicker before a real release);
+        //     released → slip toward the motor (a real lift). ---
         double targetPitch, tau;
         if (touchMode == TouchGate::Mode::Scratch)        // scratching: follow the jog
         {

@@ -133,41 +133,64 @@ only 4 genuine let-gos — and on a let-go the light platter settles
 ```
 
 So gating on the cap bit handed control back to the motor in the middle of 58
-scratches in that capture ("it keeps running while I scratch"). The decisive insight:
-**during a scratch the reliable signal is the jog, not the cap bit** — and on a real
-let-go the platter stops almost instantly, so the "coast-fly" an earlier design feared
-(and used to justify *not* bridging) barely exists.
+scratches in that capture ("it keeps running while I scratch"). The split is
+**directional**: the cap is unreliable on a forward **push** (it drops, ~58 % on) but
+reliable on a backward **pull** (~91 % on). And on a real let-go the platter stops almost
+instantly, so the "coast-fly" an earlier design feared (and used to justify *not*
+bridging) barely exists. The model below trusts the cap *while it's on* (which covers
+pulls and the body of any scratch) and treats the forward-push drop as the residual
+hardware limit — see the refinement note.
 
-**The "stick slipmat" model — follow the jog only while actively scratching; otherwise
-snap to the motor.** Two hardware facts forced this: the cap **lingers on for up to ~1 s
-after you lift** (so it can't gate release), and the light platter **keeps creeping**
-after you let go. Honouring the platter's leftover momentum (a real slipmat) therefore
-reads as a sluggish drag / dead stillstand before the motor catches. Decision (user
-call): give up the "push it forward and let it ride" trick; make **release reliably mean
-"play the sample."** So `TouchGate` (JUCE-free, unit-tested in `test/touchgate_test.cpp`
-[`make touchtest`]) follows the jog only when:
+**The "stick slipmat" model — a finger on the platter is in control; a real lift snaps to
+the motor.** While the cap reads **on**, the jog drives the playhead (moving ⇒ scratch,
+still ⇒ the record eases to a stop *under* your finger); the moment you **lift** (cap → 0)
+it slips *stiffly* to the motor. It does **not** ride the platter's leftover momentum: the
+light platter keeps creeping after you let go, so honouring it reads as a sluggish drag /
+dead stillstand before the motor catches. Decision (user call): give up the "push it
+forward and let it ride" trick; make **release reliably mean "play the sample."** So
+`TouchGate` (JUCE-free, unit-tested in `test/touchgate_test.cpp` [`make touchtest`])
+follows the jog when:
 
 - **motor stopped** — a dead record you cue by hand (so "not running recognises touch
   without touching" is correct by design), or
-- **cap on AND the platter is moving** — you're actively scratching.
+- **cap on** — your finger is on the platter (moving = scratch, still = hold/stop).
 
-Anything else — a lift, a stop, or a coasting platter (even with the cap still reading
-on) — **slips to the motor**, *stiffly* (`kSlipTau` ≈ 12 ms, a "sticky" catch that snaps
-to 1× rather than coasting). A short hold (**Coast**, `kTouchReleaseHold` 20 ms) rides
-scratch reversals and brief cap flicker before committing to the slip.
+Only a real **lift** (motor running **and** cap off) **slips to the motor**, *stiffly*
+(`kSlipTau` ≈ 12 ms, a "sticky" catch that snaps to 1× rather than coasting). A short hold
+(**Coast**, `kTouchReleaseHold` 20 ms) rides a brief cap-off **flicker** (a blip vs a real
+lift) before committing to the slip.
 
-This drops the earlier *strong-jog bridge* (which followed fast cap-off motion): that was
-exactly the momentum-ride the stick slipmat removes. Net: scratching is unaffected (it's
-cap-on + moving), and every release snaps to 1× in ~30–40 ms regardless of how fast the
-platter was moving. **Tape-stop** is still available as a *slow-down* (cap on +
-decelerating jog → follows it down); once stopped it returns to the motor (no indefinite
-hold — that would need a separate control, since a still platter can't be told apart from
-a lift with the cap lingering).
+**Why trust the cap bit — refinement (2026-06).** An earlier version *also* required the
+platter to be **moving** (`cap on AND moving`), to dodge the "cap lingers after lift" fear
+above. But the captures prove the cap is reliable exactly where it matters: it sits **on
+through the whole of a backward pull** (cap-on ≈ 91 %, vs ≈ 58 % on a forward push) and
+drops **cleanly to 0 on a real lift** (settles in ~21 ms). The extra `&& moving` instead
+misfired at every **slow point** of a scratch — a turnaround, a slow pull — where the jog
+momentarily reads 0 (the ±1 idle deadband, `kJogDeadband`). With the cap still on, the
+gate handed to the motor and yanked the playhead toward **+1× against the stroke**: the
+*"pulling back fights the motor"* feel the user reported. Replaying `trace.csv` through
+both gates: **15 cap-on motor-takeovers → 0**, while genuine-lift latency stays ~16→21 ms
+(one block — still snappy). Dropping the qualifier is *surgical*: the only blocks it
+changes are "cap on + platter still + motor running", which flip from "release to the
+motor" to "hold the record" — physically what touching a playing platter should do.
 
-Validated on real captures: stillstand-on-release gone, release snaps to the motor
-without riding momentum, baby/slow scratching still follows. Tunables at the top of
-`ScratchEngine.h`: `kSlipTau` (catch stiffness — smaller = snappier) and
-`kTouchReleaseHold` (reversal/flicker ride). Re-tune against a fresh capture with
+The remaining forward-push **dropouts** (cap off mid-push, up to ~1.4 s) are a **hardware**
+limit (PIC cap-sense) the host can't fix — but the motor they fall back to is +1×, the
+*same* direction as a push, so they're barely audible. **Tape-stop** is still available as
+a *slow-down* (cap on + decelerating jog → follows it down to a held stop).
+
+**Tradeoff.** Trusting `cap on` means: if a unit's cap genuinely *lingers* on long after a
+lift (not seen on this MK2 — lifts read clean), the record would hold **silent** under the
+phantom touch instead of resuming the motor. The bounded fix, if it ever shows up, is a
+`kHeldMax` timeout — after the cap has been on but the platter dead-still for > ~0.5 s with
+the motor running, assume a stuck cap and slip to the motor. **Not added now:** it would
+also cut off a deliberate long hold, and the capture shows no lingering. See "Open
+questions".
+
+Validated on captures: the cap-on motor-takeover ("fighting the motor") gone, release
+still snaps without riding momentum, slow/baby scratching and turnarounds follow cleanly.
+Tunables at the top of `ScratchEngine.h`: `kSlipTau` (catch stiffness — smaller = snappier)
+and `kTouchReleaseHold` (cap-flicker ride). Re-tune against a fresh capture with
 `make trace-replay TRACE=trace.csv RELEASE_HOLD=<secs>` then `trace-analyze`.
 
 ### Diagnosing on hardware — the trace capture
@@ -293,9 +316,12 @@ guarantees true scratch feel.
    *silent/paused* (pure turntable scrub — only sounds when the platter moves),
    or *playing at 1×* (CDJ-style, jog only nudges)? Or a **mode toggle**?
    *(Lean: pure scrub for MVP — it matches the SC1000 and is what "scratch" means.)*
-2. **Touch semantics** — scratch only while `touched` (Note20) is on? Or does the
-   jog always scrub? On release: hard stop, **coast with inertia** (emulate the
-   weighted platter — SC1000 has `slippiness`/`brakespeed`), or hold position?
+2. **Touch semantics** — ~~scratch only while `touched`? jog always scrub? release =
+   stop/coast/hold?~~ **DECIDED (see "Touch sensing"):** `cap on` (or a stopped motor)
+   ⇒ the jog is in control (moving = scratch, still = the record eases to a stop under
+   the finger); a real **lift** (cap off) snaps *stiffly* to the motor, no momentum ride.
+   *Still open:* a `kHeldMax` stuck-cap timeout — only if a unit's cap is found to linger
+   on after a lift (this MK2 doesn't); it would trade off against deliberate long holds.
 3. **Inertia/slip** — model platter momentum on release, or keep it simple (stop)?
 
 ### Controls

@@ -2,9 +2,10 @@
 //   clang++ -std=c++17 -I../src touchgate_test.cpp -o touchgate_test && ./touchgate_test
 // or, from the repo root:  make touchtest
 //
-// "Stick slipmat": follow the jog only while actively scratching (cap on + moving), or
-// cue-by-hand at a dead motor. Anything else — a lift, a stop, a coasting platter —
-// snaps to the motor; the leftover platter momentum is deliberately NOT followed.
+// "Stick slipmat": a finger on the platter (cap on) — or cue-by-hand at a dead motor —
+// follows the jog (moving => scratch, still => hold the record under the finger). Only a
+// real LIFT (cap off while the motor runs) snaps to the motor; the leftover platter
+// momentum is deliberately NOT followed.
 
 #include "TouchGate.h"
 #include "TraceLog.h"
@@ -82,14 +83,16 @@ int main()
         expect ("then snaps to motor", run (g, 3, false, 20, false),    TouchGate::Mode::Released);
     }
 
-    // 5) Stop with the cap still reading ON (it lingers after a lift): a still platter
-    //    pulls to the motor — not a dead stop.
+    // 5) Finger held on the platter with no motion (cap on, jog 0): the record holds /
+    //    eases to a stop UNDER the finger — it is NOT handed to the motor while touched.
+    //    (This is the fix for "pulling back fights the motor": a slow point of a scratch
+    //    no longer yanks the playhead to +1×. See docs/ARCHITECTURE.md "Touch sensing".)
     {
-        std::printf ("[5] stop with cap lingering ON → pulls to the motor\n");
+        std::printf ("[5] finger down, platter still (cap on) -> holds the record, never fights to the motor\n");
         auto g = makeGate();
         run (g, 5, true, 20, false);
-        expect ("just stopped: holds (Coast)",     g.process (kBlock, true, 0, false), TouchGate::Mode::Coast);
-        expect ("cap still on but still → motor",  run (g, 3, true, 0, false),         TouchGate::Mode::Released);
+        expect ("just stopped: still follows (hold)", g.process (kBlock, true, 0, false), TouchGate::Mode::Scratch);
+        expect ("stays held while touched",           run (g, 30, true, 0, false),        TouchGate::Mode::Scratch);
     }
 
     // 6) Not running (motor stopped) → the jog always scrubs (cue by hand).
@@ -100,13 +103,24 @@ int main()
         expect ("cue by hand (jog, no touch)",     g.process (kBlock, false, 20, true), TouchGate::Mode::Scratch);
     }
 
-    // 7) Brief reversal/flicker (1 block) holds (Coast), then resumes — doesn't snap.
+    // 7) Brief reversal/pause WHILE TOUCHED stays in control: it follows the jog straight
+    //    through zero (no handoff to the motor), so a turnaround doesn't fight.
     {
-        std::printf ("[7] brief reversal holds, then resumes\n");
+        std::printf ("[7] touched reversal stays in control (no motor handoff at the turnaround)\n");
         auto g = makeGate();
         run (g, 5, true, 20, false);
-        expect ("1-block pause holds (Coast)", g.process (kBlock, true, 0, false), TouchGate::Mode::Coast);
-        expect ("motion resumes → scratch",    g.process (kBlock, true, 20, false), TouchGate::Mode::Scratch);
+        expect ("1-block pause still follows", g.process (kBlock, true, 0,   false), TouchGate::Mode::Scratch);
+        expect ("reverses → still follows",    g.process (kBlock, true, -20, false), TouchGate::Mode::Scratch);
+    }
+
+    // 7b) A brief cap DROPOUT while still moving (a flicker, not a lift) rides via the
+    //     Coast hold and returns to Scratch when the cap comes back — no spurious handoff.
+    {
+        std::printf ("[7b] brief cap dropout while moving rides (Coast) then resumes scratch\n");
+        auto g = makeGate();
+        run (g, 5, true, 20, false);
+        expect ("cap blips off for 1 block (Coast)", g.process (kBlock, false, 20, false), TouchGate::Mode::Coast);
+        expect ("cap returns → scratch again",       g.process (kBlock, true,  20, false), TouchGate::Mode::Scratch);
     }
 
     // 8) TraceLog round-trips a row to CSV.
