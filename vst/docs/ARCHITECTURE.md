@@ -120,7 +120,25 @@ block; rate (and direction) = (Δplayhead / blockDuration).
 The capacitive pad is a single noisy bit straight from the PIC (`sc_input.c`:
 `capIsTouched = (result >> 4 & 0x01)`, shipped as CC21 + Note20). There is **no
 sensitivity / threshold / hysteresis in the Linux firmware** to tune — that logic
-lives in the PIC microcontroller (separate, not in either repo). It is **not** usable
+lives in the PIC input processor (PIC18LF14K22, upstream `firmware/main.c`;
+reflashable only with a PICkit via the main PCB's **ICSP header J8**, not via
+the USB-stick updater). **Which PIC build is running matters** (learned
+2026-07-07): the checked-in `firmware.hex` — what PICs are burned with — is
+from **2018-12** and was never rebuilt, so the *source's* current algorithm
+(2020-08: EMA-smoothed level α = 0.01, threshold = boot-baseline − 100,
+20-sample flip debounce both ways) is **not** what this MK2 runs. The 2018
+build in the unit: **no smoothing** (raw 10-bit samples straight against the
+threshold), threshold calibrated once at boot (baseline minimum − 96 counts,
+no hysteresis gap), touch latched after **3** consecutive low samples, release
+after **200** consecutive high samples. So a mid-scratch dropout means the raw
+signal genuinely sat above threshold for 200 straight samples — real coupling
+loss and/or a boot-calibrated threshold gone thin with drift
+(grounding/humidity/hand), fitting the observed session-dependent dropouts.
+**The CC 22 firmware build forwards the analog level behind the bit (PIC I2C
+regs 6/7) as CC 22** (`>> 3`, lower = more touch; see `MIDI-MAPPING.md`) — but
+those registers only exist in post-2019-05 PIC firmware: **on this MK2, CC 22
+reads constant 0 until the PIC is reflashed** (verified live: 72 s capture, 28
+touch transitions, CC 22 flat). The bit alone is **not** usable
 as the sole scratch gate, and a 107 s capture (`make trace`, analysed by
 `trace_replay`) said exactly how badly:
 
@@ -129,69 +147,122 @@ cap-on rate:   backward pull 91%    forward push 58%    (the bit drops on the pu
 66 forward-push dropouts mid-scratch, median 203 ms, up to ~1.16 s,
    with the jog CLEARLY still moving the whole time
 only 4 genuine let-gos — and on a let-go the light platter settles
-   (jog → 0) within ~21 ms
+   (jog → 0) within ~21 ms        [WRONG — see 2026-07-07 correction below]
 ```
 
 So gating on the cap bit handed control back to the motor in the middle of 58
 scratches in that capture ("it keeps running while I scratch"). The split is
 **directional**: the cap is unreliable on a forward **push** (it drops, ~58 % on) but
-reliable on a backward **pull** (~91 % on). And on a real let-go the platter stops almost
-instantly, so the "coast-fly" an earlier design feared (and used to justify *not*
-bridging) barely exists. The model below trusts the cap *while it's on* (which covers
-pulls and the body of any scratch) and treats the forward-push drop as the residual
-hardware limit — see the refinement note.
+reliable on a backward **pull** (~91 % on).
 
-**The "stick slipmat" model — a finger on the platter is in control; a real lift snaps to
-the motor.** While the cap reads **on**, the jog drives the playhead (moving ⇒ scratch,
-still ⇒ the record eases to a stop *under* your finger); the moment you **lift** (cap → 0)
-it slips *stiffly* to the motor. It does **not** ride the platter's leftover momentum: the
-light platter keeps creeping after you let go, so honouring it reads as a sluggish drag /
-dead stillstand before the motor catches. Decision (user call): give up the "push it
-forward and let it ride" trick; make **release reliably mean "play the sample."** So
-`TouchGate` (JUCE-free, unit-tested in `test/touchgate_test.cpp` [`make touchtest`])
-follows the jog when:
+> **Correction (2026-07-07):** the "~21 ms settle" above was measured on gentle lifts
+> from slow/held platters and does **not** generalise: a fresh capture shows a platter
+> released at speed **freewheels for > 1.2 s** (constant-deceleration coast,
+> a ≈ 2250 counts/s²). That killed both "release = platter stops" reasoning *and* the
+> "motion = touch" idea (a freewheeling platter keeps `|jog| > deadband` for over a
+> second). It also killed trusting the cap bit directly: the same class of captures
+> logged **15 cap drops in 11 s** of normal scratching, clusters of 5 mid-pull, each a
+> pitch yank from −1.7 to +1 (the "stutter"). The model below keys on the *only* motion
+> a freewheel can't fake — acceleration or reversal — and defaults to release otherwise.
 
-- **motor stopped** — a dead record you cue by hand (so "not running recognises touch
-  without touching" is correct by design), or
-- **cap on** — your finger is on the platter (moving = scratch, still = hold/stop).
+**The model — "release by default, acceleration negates the touch-off" (2026-07-07,
+final).** `TouchGate` (JUCE-free, unit-tested in `test/touchgate_test.cpp`
+[`make touchtest`]) follows the jog when:
 
-Only a real **lift** (motor running **and** cap off) **slips to the motor**, *stiffly*
-(`kSlipTau` ≈ 12 ms, a "sticky" catch that snaps to 1× rather than coasting). A short hold
-(**Coast**, `kTouchReleaseHold` 20 ms) rides a brief cap-off **flicker** (a blip vs a real
-lift) before committing to the slip.
+- **motor stopped** — a dead record you cue by hand, or
+- **cap on** — your finger is on the platter (moving = scratch, still = eases to a stop
+  under the finger), or
+- **cap off but the platter just accelerated or reversed** — motion a freewheel *cannot*
+  produce, so a hand must be on it.
 
-**Why trust the cap bit — refinement (2026-06).** An earlier version *also* required the
-platter to be **moving** (`cap on AND moving`), to dodge the "cap lingers after lift" fear
-above. But the captures prove the cap is reliable exactly where it matters: it sits **on
-through the whole of a backward pull** (cap-on ≈ 91 %, vs ≈ 58 % on a forward push) and
-drops **cleanly to 0 on a real lift** (settles in ~21 ms). The extra `&& moving` instead
-misfired at every **slow point** of a scratch — a turnaround, a slow pull — where the jog
-momentarily reads 0 (the ±1 idle deadband, `kJogDeadband`). With the cap still on, the
-gate handed to the motor and yanked the playhead toward **+1× against the stroke**: the
-*"pulling back fights the motor"* feel the user reported. Replaying `trace.csv` through
-both gates: **15 cap-on motor-takeovers → 0**, while genuine-lift latency stays ~16→21 ms
-(one block — still snappy). Dropping the qualifier is *surgical*: the only blocks it
-changes are "cap on + platter still + motor running", which flip from "release to the
-motor" to "hold the record" — physically what touching a playing platter should do.
+Otherwise cap-off **releases** — fast, at any speed, in any direction: after a short
+flicker-hold (`kReleaseHold` ≈ 40 ms) the motor takes it via the firm slipmat catch
+(`kSlipTau` ≈ 35 ms), ~90 ms to track speed. **Movement alone is never touch; only
+unfakeable motion is.**
 
-The remaining forward-push **dropouts** (cap off mid-push, up to ~1.4 s) are a **hardware**
-limit (PIC cap-sense) the host can't fix — but the motor they fall back to is +1×, the
-*same* direction as a push, so they're barely audible. **Tape-stop** is still available as
-a *slow-down* (cap on + decelerating jog → follows it down to a held stop).
+Why this shape, and not the many that preceded it (see the git history of `TouchGate.h`
+for the full archaeology — a freewheel-physics predictor with tolerance + decay gate +
+motor-match zone + deliberate-scratch band + bridge timeout): a *released* platter's
+behaviour overlaps a *hand's* almost everywhere. It freewheels for > 1 s (so "released =
+stopped" is false and "motion = touch" holds long after a let-go); its low-speed crawl
+decays far slower than Coulomb friction (so a decay predictor mistakes a gentle let-go
+for a drag and sags forever); the encoder's ±30 % per-rev ripple scales with speed (so
+any fixed tolerance either stalls fast releases or misses slow drags). Every model that
+tried to *classify the whole trajectory* traded one artifact for another across six
+hardware sessions (S1 stutter, S2 wind-down stops, S3 slow-drag yanks, S4 flaky 1×
+releases, S5 gentle-let-go sags, S6 "step backwards"). The user's insight cut through it:
+a freewheel can **never speed up and never reverse** — that is the *only* signal that
+cleanly separates hand from no-hand, so it is the only thing the gate keys on. Everything
+else defaults to release.
 
-**Tradeoff.** Trusting `cap on` means: if a unit's cap genuinely *lingers* on long after a
-lift (not seen on this MK2 — lifts read clean), the record would hold **silent** under the
-phantom touch instead of resuming the motor. The bounded fix, if it ever shows up, is a
-`kHeldMax` timeout — after the cap has been on but the platter dead-still for > ~0.5 s with
-the motor running, assume a stuck cap and slip to the motor. **Not added now:** it would
-also cut off a deliberate long hold, and the capture shows no lingering. See "Open
-questions".
+Mechanics — hand evidence is any of:
+- **re-acceleration** — `|v|` rising above its running minimum by `kAccelAbs` +
+  `kAccelRel`·min (a freewheel never speeds up);
+- **reversal** at speed (a freewheel never turns around);
+- **anti-motor "not freewheeling"** — the motor only ever drives *forward*, so a platter
+  moving *backward* (above `kSustainSpeed`) can't happen without a hand — **except** the
+  brief backward coast just after a backspin release, which freewheels toward 0. So while
+  moving backward, evidence fires *unless* the deceleration matches the free-coast rate
+  (`kFreewheelDecel` ± `kDecelTol`). This is what holds the *steady* and *decelerating*
+  stretches of a pull — jog −22 held flat, jog −85→−48 braking at 60× friction — that
+  carry no re-acceleration to detect (the S8 pull-back stutter). It's deliberately
+  **backward-only**: a forward coast (a release, or a same-direction push dropout) is
+  never held by it, so forward let-gos stay snappy.
 
-Validated on captures: the cap-on motor-takeover ("fighting the motor") gone, release
-still snaps without riding momentum, slow/baby scratching and turnarounds follow cleanly.
-Tunables at the top of `ScratchEngine.h`: `kSlipTau` (catch stiffness — smaller = snappier)
-and `kTouchReleaseHold` (cap-flicker ride). Re-tune against a fresh capture with
-`make trace-replay TRACE=trace.csv RELEASE_HOLD=<secs>` then `trace-analyze`.
+Any of these sets a `kHandHold` (≈ 200 ms) window that keeps the bridge alive; real
+scratch strokes renew it every ~50–100 ms. A strong event while *already* released
+**re-captures** control (`kCaptureFloor`) — this is how a forward-push dropout, cap fully
+dead for the whole stroke, still tracks the hand. The subtlety that made or broke the
+forward case: the velocity EMA (`kTouchVelTau` 60 ms) *lags*, so a release mid-push makes
+it converge upward = a phantom "re-acceleration" that re-holds every release (the S6
+"worse" feel — 250–500 ms sagging rides). Fixed by seeding: a leading estimate
+(`kVelTauFast` 12 ms) snaps into the working estimate the instant the cap drops, so
+there's no transient to fake.
+
+Result across all eight sessions: **forward releases are a clean ~40–140 ms handoff to
+track speed** (S7: down from ~180–235 ms sluggish spin-up — the "too weak motor / paused"
+feel — via flicker-hold 100 → 40 ms and slip 80 → 35 ms; the user confirmed this
+"natural"), and **pull-back stutters dropped from a long list to 0–2 slow/brief blips per
+session** (S8: the anti-motor test holds sustained/braked pulls that used to hand +1×
+against the pull for 200–280 ms). The stutter stays bridged, backspins release cleanly,
+cap-dead strokes track via re-capture.
+
+**Forward-flick let-slip — tried and reverted (S9/S10).** A flung forward flick (spin the
+platter past the motor and let it slip) snaps to 1× the instant the cap drops rather than
+riding its forward momentum down. A `kFlickRide` gate (ride the freewheel while forward
+above ~1.3×) fixed that single flick and left every normal release untouched — BUT it
+compromised the **rapid on/off release** technique (S10): a forward flick and a rhythmic
+on/off tap are the *same signal* (forward, above motor, cap off); the flick-ride held the
+forward pushes at ~1.5×, so the sample drifted/slipped forward instead of settling to 1×
+each tap. The only thing that separates them is off-*duration* (a flick stays released
+~800 ms, a tap ~130 ms), which isn't knowable at the drop without delaying the ride into a
+jump. Per the user's "don't compromise the other fixes for this," the flick-ride was
+**reverted**: a single flick snapping to 1× is an accepted cosmetic limit; the on/off
+release settling correctly is not negotiable.
+
+**Residual (accepted):** the *very slow tail* of a backward pull (jog −7 ≈ −0.3×, where a
+hand-held pull and a dying backward freewheel become genuinely indistinguishable) can
+still briefly hand to the motor — ≈1–2 slow/brief blips per pull-heavy session, matching
+"pull-back worst case: still jumpy/stuttery, rather rare". A dead-still held platter with
+a phantom cap-drop also releases (no motion = no evidence).
+
+The deliberate costs, both accepted: a *perfectly steady* drag with the cap off (no
+acceleration for > `kReleaseHold`) hands to the motor as a soft ~`kSlipTau` swell until
+the next stroke re-captures — but real scratching is never steady, the strokes are the
+evidence; and a phantom cap-drop on a **dead-still held** platter is indistinguishable
+from a release (no motion, no evidence) and releases until you move or re-grip (the PIC
+re-latches touch in ~3 samples). **Tape-stop** is still available as a slow-down (cap on
++ decelerating jog → follows it down to a held stop).
+
+Validated on captures (**all seven 2026-07-07 sessions replayed together** — always check a
+tuning change against ALL of them, they stress different regimes; the fixtures live in
+`vst/test/traces/`). Tunables at the top of `ScratchEngine.h`: `kAccelAbs`/`kAccelRel`
+(hand-evidence sensitivity vs encoder ripple), `kHandHold` (how long one swell holds —
+vs how fast a true release commits after the last stroke), `kReleaseHold` (flicker ride),
+`kVelTauFast`/`kTouchVelTau` (the seed vs the working estimate), `kCaptureFloor`
+(re-capture threshold), and `kSlipTau` (the soft catch — bigger masks residual wrong
+calls, smaller snaps harder). Re-tune against a fresh capture with
+`make trace-replay TRACE=trace.csv HANDHOLD=<secs> RELEASEHOLD=<secs>` then `trace-analyze`.
 
 ### Diagnosing on hardware — the trace capture
 
@@ -317,12 +388,28 @@ guarantees true scratch feel.
    or *playing at 1×* (CDJ-style, jog only nudges)? Or a **mode toggle**?
    *(Lean: pure scrub for MVP — it matches the SC1000 and is what "scratch" means.)*
 2. **Touch semantics** — ~~scratch only while `touched`? jog always scrub? release =
-   stop/coast/hold?~~ **DECIDED (see "Touch sensing"):** `cap on` (or a stopped motor)
-   ⇒ the jog is in control (moving = scratch, still = the record eases to a stop under
-   the finger); a real **lift** (cap off) snaps *stiffly* to the motor, no momentum ride.
-   *Still open:* a `kHeldMax` stuck-cap timeout — only if a unit's cap is found to linger
-   on after a lift (this MK2 doesn't); it would trade off against deliberate long holds.
-3. **Inertia/slip** — model platter momentum on release, or keep it simple (stop)?
+   stop/coast/hold?~~ **DECIDED (see "Touch sensing", final 2026-07-07):** `cap on`
+   (or a stopped motor) ⇒ the jog is in control; cap **off** ⇒ release (soft slipmat
+   catch), *unless* the platter accelerates or reverses (motion a freewheel can't make)
+   ⇒ a hand is on it ⇒ keep scratching. Movement alone is never touch. *Still open:* a
+   dead-still held platter with a phantom cap-drop still releases (no motion = no
+   evidence) — the accepted residual.
+3. **Inertia/slip** — ~~model platter momentum on release, or keep it simple (stop)?~~
+   **DECIDED: no synthetic inertia.** Release commits fast (`kReleaseHold` ≈ 40 ms), then
+   the firm slipmat catch (`kSlipTau` ≈ 35 ms) slews to the motor — ~90 ms to track
+   speed, a prompt grab rather than a sluggish modelled coast.
+3b. **Host-side touch detection from CC 22** — the CC 22 firmware build streams the
+   PIC's smoothed capsense level (the analog signal behind the CC21 bit; lower =
+   more touch). **Blocked on hardware (2026-07-07):** this MK2's PIC predates the
+   regs-6/7 export, so CC 22 reads constant 0 (see "Touch sensing"). Unblocking =
+   reflashing the PIC via ICSP header J8 with a PICkit — which also upgrades the
+   detector itself (2018 raw-sample build → current smoothed source), and once a
+   PICkit is in hand the PIC firmware becomes *ours* to improve: real hysteresis
+   gap, adaptive re-baselining, exporting the raw level. If/when CC 22 is live:
+   capture a dropout trace, check the margin when the bit flaps, then detect in
+   the plugin — adaptive baseline while released + dual thresholds with a real
+   hysteresis gap — using the PIC bit only as a fallback. Until then, host-side
+   touch work continues on the CC 21 bit + jog context only (TouchGate).
 
 ### Controls
 4. **Crossfader (CC16)** — ~~gate vs linear vs user-assignable? what curve?~~

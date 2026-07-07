@@ -4,7 +4,7 @@
 // the capture (it doesn't depend on the gate); only the touch decision is re-run.
 //
 //   clang++ -std=c++17 -I../src trace_replay.cpp -o trace_replay
-//   ./trace_replay in.csv out.csv [releaseHoldSec] [attackConfirmSec]
+//   ./trace_replay in.csv out.csv [handHoldSec] [releaseHoldSec]
 //   python3 trace_analyze.py out.csv
 //
 // Pitch/playhead columns are carried over unchanged (stale) — the actionable metric
@@ -25,11 +25,12 @@ int main(int argc, char** argv)
     if (!out) { std::fprintf(stderr, "cannot write %s\n", argv[2]); return 2; }
 
     TouchGate g;
-    if (argc >= 4) g.releaseHoldSec = std::stod(argv[3]);
+    if (argc >= 4) g.handHold    = std::stod(argv[3]);
+    if (argc >= 5) g.releaseHold = std::stod(argv[4]);
 
     // Engine pitch constants (mirror ScratchEngine.h) so the recomputed pitch matches
     // the plugin — lets the analyzer's [R]/[2] (pitch-based) score the replayed gate.
-    constexpr double kPlat = 2275.0, kScratchTau = 0.020, kSlipTau = 0.012;
+    constexpr double kPlat = 2275.0, kScratchTau = 0.020, kSlipTau = 0.035;
     double pitch = 0.0;
 
     char line[512];
@@ -50,14 +51,14 @@ int main(int argc, char** argv)
         if (prevT >= 0 && t > prevT) rate = prevN / (t - prevT);
         prevT = t; prevN = n;
         g.configure(rate);
-        auto m = g.process(n, rawTouch != 0, jog, motorStopped != 0);
+        auto m = g.process(n, rawTouch != 0, jog, motorSpeed);
         // recompute pitch with the same model the engine uses
         double target, tau;
         if (m == TouchGate::Mode::Scratch)   { target = (n > 0) ? (double) jog * rate / (kPlat * n) : 0.0; tau = kScratchTau; }
         else if (m == TouchGate::Mode::Coast){ target = pitch; tau = kScratchTau; }
         else                                 { target = motorSpeed; tau = kSlipTau; }
         pitch += (1.0 - std::exp(-(double) n / (tau * rate))) * (target - pitch);
-        c[8] = std::to_string(m == TouchGate::Mode::Scratch ? 1 : (m == TouchGate::Mode::Coast ? 2 : 0)); // mode
+        c[8] = std::to_string(m != TouchGate::Mode::Scratch ? 0 : (g.isBridging() ? 2 : 1)); // mode (2 = bridging a cap drop)
         c[9] = std::to_string(g.isEngaged() ? 1 : 0);                 // engaged
         char pbuf[32]; std::snprintf(pbuf, sizeof pbuf, "%.5f", pitch);
         c[10] = pbuf;                                                  // pitch (recomputed)

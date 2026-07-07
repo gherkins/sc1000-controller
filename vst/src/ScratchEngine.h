@@ -32,9 +32,33 @@ class ScratchEngine
 public:
     static constexpr double kPlatterSpeed = 2275.0; // jog counts per audio-second (≈ 33 rpm)
     static constexpr double kScratchTau   = 0.020;  // jog→pitch smoothing (s) — kills per-block MIDI jitter
-    static constexpr double kTouchReleaseHold = 0.020; // brief hold that rides a cap-off flicker (a blip vs a real lift) before snapping to the motor (s)
+    // Strict hand-evidence touch gate (TouchGate.h): cap-off RELEASES fast — always —
+    // unless the platter accelerates or reverses (impossible for a freewheel), which
+    // negates the touch-off and keeps the jog in control. Movement alone is never
+    // touch; only motion a freewheel cannot produce is.
+    static constexpr double kAccelAbs    = 300.0; // counts/s — the |v| rise (above its running minimum) that
+                                                  // counts as hand evidence; must clear the smoothed ripple
+    static constexpr double kAccelRel    = 0.20;  // + fraction of the running minimum (ripple scales with speed)
+    static constexpr double kFreewheelDecel = 2250.0; // counts/s² — the platter's free-coast deceleration; at
+                                                  // speed a freewheel slows at exactly this — anything else = hand
+    static constexpr double kSustainSpeed = 500.0;  // counts/s (≈0.22×) — floor for the anti-motor (backward)
+                                                  // "not freewheeling" test; below = idle, ignore encoder noise
+    static constexpr double kDecelTol    = 0.6;   // fraction — how far a BACKWARD platter's decel may sit from
+                                                  // the freewheel rate and still read as a backspin release
+    static constexpr double kHandHold    = 0.200; // s — one piece of evidence keeps the bridge alive this long
+                                                  // (real strokes re-accelerate every ~50–100 ms)
+    static constexpr double kReleaseHold = 0.040; // s — evidence-free time before a release commits. Short:
+                                                  // it only rides a 2–3 block cap glitch; real scratches are
+                                                  // held by the accel/reversal test, not this. Longer just
+                                                  // makes the release track the coasting platter (mushy)
+    static constexpr double kVelTauFast  = 0.012; // s — leading velocity estimate (seeds vHat at the drop)
+    static constexpr double kCaptureFloor= 600.0; // counts/s — re-capture from RELEASED needs real motion
+    static constexpr double kTouchVelTau = 0.060; // s — platter-velocity smoothing for the evidence test
     static constexpr double kBrakeSpeed   = 3000.0; // firmware brakespeed — bigger = longer tape stop
-    static constexpr double kSlipTau      = 0.012;  // "stick slipmat" catch time (s) — how fast release snaps to the motor (smaller = stiffer/instant)
+    static constexpr double kSlipTau      = 0.035;  // slipmat catch time (s) — release slews to the motor. Firm
+                                                    // (~35 ms) so the motor takes over promptly instead of a
+                                                    // sluggish "too weak motor" spin-up. Not instant, to de-click
+                                                    // the handoff; wrong releases are rare now (accel-gated)
     static constexpr double kFaderOpenPt  = 0.010;  // double-cut: opens when centre-distance exceeds this
     static constexpr double kFaderClosePt = 0.004;  // ...closes below this (hysteresis, near each edge)
     static constexpr double kFaderDecay   = 0.020;  // crossfader cut decay (s) — de-click
@@ -55,7 +79,16 @@ public:
         motorSpeed = 0.0;
         faderVol = 0.0;
         faderOpen = false;
-        touchGate.releaseHoldSec = kTouchReleaseHold;
+        touchGate.accelAbs     = kAccelAbs;
+        touchGate.accelRel     = kAccelRel;
+        touchGate.freewheelDecel = kFreewheelDecel;
+        touchGate.sustainSpeed = kSustainSpeed;
+        touchGate.decelTol     = kDecelTol;
+        touchGate.handHold     = kHandHold;
+        touchGate.releaseHold  = kReleaseHold;
+        touchGate.velTauFast   = kVelTauFast;
+        touchGate.captureFloor = kCaptureFloor;
+        touchGate.velTau       = kTouchVelTau;
         touchGate.configure (hostRate);
         touchGate.reset();
     }
@@ -132,13 +165,13 @@ public:
         const bool motorStopped = motorSpeed < 1.0e-6; // motor not driving the platter
 
         // --- touch gate (TouchGate.h): the capacitive bit (CC21/Note20) is a single
-        // noisy bit, but it reads reliably ON through a backward pull and OFF on a real
-        // lift, so finger-on alone drives the decision: follow the jog whenever touched
-        // (moving ⇒ scratch, still ⇒ ease the record to a stop) or when the motor is idle,
-        // and hand back to the motor only on a real lift (cap off) — a short hold rides a
-        // brief cap-off flicker. See TouchGate.h and docs/ARCHITECTURE.md "Touch sensing".
+        // noisy bit that drops mid-scratch, so cap-off alone doesn't release: the gate
+        // keeps following the jog until the platter provably moves like an UNTOUCHED one
+        // (constant-deceleration freewheel) and only then slips to the motor. Follow the
+        // jog whenever touched, when the motor is idle, or while bridging a cap drop.
+        // See TouchGate.h and docs/ARCHITECTURE.md "Touch sensing".
         const bool rawTouch = cs.touched.load (std::memory_order_relaxed);
-        const TouchGate::Mode touchMode = touchGate.process (n, rawTouch, jog, motorStopped);
+        const TouchGate::Mode touchMode = touchGate.process (n, rawTouch, jog, motorSpeed);
 
         // --- platter speed: scratch → follow the jog (finger on; still jog ⇒ target 0, so
         //     a held platter eases to a stop rather than fighting the motor);
@@ -244,8 +277,8 @@ public:
         // --- debug capture: firmware stream + this block's decision, time-aligned ---
         if (traceLog.enabled())
         {
-            const int modeInt = (touchMode == TouchGate::Mode::Scratch) ? 1
-                              : (touchMode == TouchGate::Mode::Coast)   ? 2 : 0;
+            const int modeInt = (touchMode != TouchGate::Mode::Scratch) ? 0
+                              : touchGate.isBridging()                  ? 2 : 1; // 2 = bridging a cap drop
             traceLog.push ({ traceLog.stamp (n), n, rawJog, jog, rawTouch ? 1 : 0,
                              playing ? 1 : 0, motorSpeed, motorStopped ? 1 : 0, modeInt,
                              touchGate.isEngaged() ? 1 : 0, pitch, getPlayheadSeconds() });
