@@ -32,6 +32,7 @@ configurable; don't hard-filter on channel 1.
 | CC **19** (`0x13`) | Volume pot B (beat, back) | Control Change | 0–127 absolute |
 | CC **20** (`0x14`) | **Jog wheel** | Control Change | **relative**, two's-complement 7-bit (see below) |
 | CC **21** (`0x15`) | **Jog touch level** (capacitive) | Control Change | continuous `0`/`127`, re-sent every flush (≥ CC firmware build) |
+| CC **22** (`0x16`) | **Jog capsense analog level** | Control Change | 0–127 (PIC `touchAverage` `>> 3`), sent on change; **lower = more touch**. ⚠️ constant 0 until the PIC is reflashed (see below) |
 | Note **20** (`0x14`) | **Jog touch** edge (capacitive) | Note-On / Note-Off | on = touched, off = released (kept for edge-based hosts) |
 | Note **21** (`0x15`) | Button: sample-prev (back) | Note-On / Off | vel 127 press, 0 release |
 | Note **22** (`0x16`) | Button: sample-next (back) | Note-On / Off | " |
@@ -65,7 +66,7 @@ int delta = (value < 64) ? value : value - 128;   // -63..+63, 0 unused
 - Rate: throttled on the device to ~1 kHz (`midioutrate`, default 1000 µs). Each
   message is the movement since the last flush.
 
-### Jog touch (CC 21 level + Note 20 edge)
+### Jog touch (CC 21 level + Note 20 edge, CC 22 analog)
 
 Two representations of the same capacitive sensor:
 
@@ -80,6 +81,30 @@ Two representations of the same capacitive sensor:
 The device calibrates the capacitive baseline at boot, so touch can occasionally
 misfire; CC 21's continuous stream lets the host debounce/smooth it cleanly. The
 plugin reads CC 21 when present and falls back to the Note 20 edge otherwise.
+
+**CC 22** exposes the analog signal *behind* that verdict: the PIC input
+processor's smoothed capacitive reading (`touchAverage`, 10-bit, EMA α = 0.01 ≈
+tens of ms of built-in smoothing), which stock firmware leaves unread on the
+PIC's I2C regs 6/7. The firmware forwards it downscaled `>> 3` to 0–127, sent
+**on change** only (no every-flush resend). **Lower = more touch.** The PIC
+derives touched/not-touched from this same signal via a single boot-calibrated
+threshold (untouched baseline minimum − 100 counts ≈ **12.5 CC 22 steps**, no
+hysteresis gap, ~20-sample flip debounce) — so when CC 21 flaps while a hand is
+clearly on the platter, CC 22 shows how close the level sat to that threshold.
+Intended for touch-dropout tracing and, longer-term, host-side detection
+(adaptive baseline + real hysteresis) that out-decides the PIC. Not yet
+consumed by the plugin.
+
+> ⚠️ **On the MK2 as shipped, CC 22 reads a constant 0** (verified live
+> 2026-07-07: 72 s capture, 28 CC 21 touch transitions, CC 22 never moved).
+> Everything above describes the *current* PIC source (post-2020-08); the
+> checked-in `firmware.hex` that PICs are actually burned with is from 2018-12
+> — before the regs-6/7 export (2019-05) even existed. The 2018 build also runs
+> a different detector: **no smoothing** (raw samples against the threshold),
+> margin 96 counts, touch latched after **3** consecutive low samples, release
+> after **200** consecutive high samples. CC 22 goes live only after reflashing
+> the PIC (PIC18LF14K22) from current source via the main PCB's **ICSP header
+> J8** with a PICkit — until then, host-side detection has only the CC 21 bit.
 
 ### Buttons (Notes 21–24)
 

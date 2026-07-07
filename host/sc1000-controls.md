@@ -17,6 +17,7 @@ analysis — is in [`vst/docs/MIDI-MAPPING.md`](../vst/docs/MIDI-MAPPING.md) and
 | **Jog wheel** rotation | top      | AS5601 encoder             | **CC 20** relative¹ | ✅ MVP |
 | Jog touch (level)      | top      | capacitive (PIC bit 4)     | **CC 21** 0/127 cont.⁴ | ✅     |
 | Jog touch (edge)       | top      | capacitive (PIC bit 4)     | **Note 20** on/off  | ✅     |
+| Jog capsense (analog)  | top      | PIC `touchAverage` regs 6/7 | **CC 22** (0–127)⁵ | ✅ (added) |
 | Sample prev / next     | back     | PIC `buttons[0]` / `[1]`   | **Note 21 / 22**    | ✅ (added) |
 | Beat prev / next       | back     | PIC `buttons[2]` / `[3]`   | **Note 23 / 24**    | ✅ (added) |
 | Shift button           | front    | IOevent `ACTION_SHIFTON/OFF` | **Note 25** on/off² | ✅ (added) |
@@ -44,6 +45,25 @@ distinguishes "set" vs "delete" from the separately-reported Shift state.
 or spurious packet self-heals next cycle — prefer this. **Note 20** still sends the
 on/off edge for edge-based hosts (Mixxx). The edge alone can leave a host stuck if an
 event is lost, which is why the continuous CC was added.
+
+⁵ **Jog capsense (analog)** is the signal *behind* the CC 21 / Note 20 verdict:
+the PIC's smoothed capacitive reading (`touchAverage`, 10-bit, published on its
+I2C regs 6/7 but unread by stock firmware), downscaled `>> 3` to 0–127 and sent
+**on change** only. **Lower = more touch.** The PIC thresholds this same signal
+against a boot-time-calibrated cutoff (baseline − 100 counts ≈ 12.5 CC steps, no
+hysteresis gap) to produce the touch bit — so CC 22 lets the host watch the
+threshold margin live (diagnosing spurious releases) or run its own smarter
+detection. Only read/sent when `midiout` is enabled.
+
+> ⚠️ **Reality check (verified live 2026-07-07 on this MK2): CC 22 reads a
+> constant 0.** The regs-6/7 export only exists in PIC *source* newer than
+> 2019-05 (`rasteri/SC1000` `firmware/main.c`), but the checked-in
+> `firmware.hex` — what PICs get burned with at assembly — dates from 2018-12
+> and was never rebuilt; this unit's PIC demonstrably runs a pre-export build.
+> The Linux-side CC 22 plumbing is kept (harmless: one message at boot, then
+> silent) and lights up automatically once the PIC is reflashed with firmware
+> built from current source — in-circuit via the main PCB's 6-pin **ICSP
+> header J8** (MCLR/PGD/PGC, PICkit-compatible, 3.3 V).
 
 ## Scope
 

@@ -11,7 +11,7 @@ index f9b7079..ffb35b0 100644
  DEVICE_CPPFLAGS = -DWITH_ALSA
  DEVICE_LIBS = $(ALSA_LIBS)
 diff --git a/software/sc_input.c b/software/sc_input.c
-index 5a286ec..7ecba56 100644
+index 9d873c1..8e18098 100644
 --- a/software/sc_input.c
 +++ b/software/sc_input.c
 @@ -29,6 +29,7 @@
@@ -22,7 +22,34 @@ index 5a286ec..7ecba56 100644
  
  bool shifted = 0;
  bool shiftLatched = 0;
-@@ -847,6 +848,9 @@ void *SC_InputThread(void *ptr)
+@@ -449,6 +450,7 @@ int file_i2c_rot, file_i2c_pic;
+ int pitchMode = 0; // If we're in pitch-change mode
+ int oldPitchMode = 0;
+ bool capIsTouched = 0;
++unsigned int capLevel = 0; // smoothed capsense level from PIC regs 6/7 (10-bit, lower = more touch)
+ unsigned char buttons[4] = {0, 0, 0, 0}, totalbuttons[4] = {0, 0, 0, 0};
+ unsigned int ADCs[4] = {0, 0, 0, 0};
+ unsigned char buttonState = 0;
+@@ -486,6 +488,18 @@ void process_pic()
+ 	buttons[3] = !(result >> 3 & 0x01);
+ 	capIsTouched = (result >> 4 & 0x01);
+ 
++	// Continuous capsense level (the PIC's smoothed touchAverage, 10-bit) from
++	// regs 6/7 - the analog signal behind the reg-5 touch bit. Forwarded to the
++	// USB-MIDI host for smarter touch detection / margin tracing; only read
++	// when MIDI out is on, to keep the input loop at full speed otherwise.
++	if (scsettings.midiout)
++	{
++		i2c_read_address(file_i2c_pic, 0x06, &result);
++		capLevel = result;
++		i2c_read_address(file_i2c_pic, 0x07, &result);
++		capLevel |= ((unsigned int)(result & 0x03) << 8);
++	}
++
+ 	process_io();
+ 
+ 	// Apply volume and fader
+@@ -847,6 +861,9 @@ void *SC_InputThread(void *ptr)
  
  	sleep(2);
  
@@ -32,16 +59,37 @@ index 5a286ec..7ecba56 100644
  	int secondCount = 0;
  
  	while (1) // Main input loop
-@@ -912,6 +916,9 @@ void *SC_InputThread(void *ptr)
+@@ -912,6 +929,9 @@ void *SC_InputThread(void *ptr)
  			}
  
  			process_rot();
 +
 +			// Emit crossfader/volume/jog/touch to the USB-MIDI gadget for the host
-+			sc_midi_out_update(deck[1].encoderAngle, ADCs[0], ADCs[1], ADCs[2], ADCs[3], capIsTouched);
++			sc_midi_out_update(deck[1].encoderAngle, ADCs[0], ADCs[1], ADCs[2], ADCs[3], capIsTouched, capLevel);
  		}
  		else // couldn't find input processor, just play the tracks
  		{
+diff --git a/software/sc_midimap.c b/software/sc_midimap.c
+index 8f21d6e..372541b 100644
+--- a/software/sc_midimap.c
++++ b/software/sc_midimap.c
+@@ -6,6 +6,7 @@
+ #include <stdlib.h>
+ #include "sc_midimap.h"
+ #include "xwax.h"
++#include "sc_midi_out.h"
+ 
+ /*
+ void add_IO_mapping(struct mapping **maps, unsigned char Pin, bool Pullup, bool Edge, unsigned char DeckNo, unsigned char Action, unsigned char Param)
+@@ -85,6 +86,8 @@ void IOevent(struct mapping *map, unsigned char MidiBuffer[3])
+ 
+ 	if (map != NULL)
+ 	{
++		// Mirror physical button presses out as USB-MIDI (cue/shift/startstop)
++		sc_midi_out_io_event(map);
+ 		//printf("Map notnull type:%d deck:%d po:%d edge:%d pin:%d action:%d param:%d\n", map->Type, map->DeckNo, map->port, map->Edge, map->Pin, map->Action, map->Param);
+ 		//dump_maps();
+ 		if (map->Action == ACTION_CUE)
 diff --git a/software/xwax.c b/software/xwax.c
 index de7ff7f..375a74f 100644
 --- a/software/xwax.c
@@ -95,24 +143,3 @@ index 230cbd7..0d81f87 100644
      bool midiRemapped;
      bool ioRemapped;
  
-diff --git a/software/sc_midimap.c b/software/sc_midimap.c
---- a/software/sc_midimap.c
-+++ b/software/sc_midimap.c
-@@ -5,7 +5,8 @@
- #include <stdbool.h>
- #include <stdlib.h>
- #include "sc_midimap.h"
- #include "xwax.h"
-+#include "sc_midi_out.h"
- 
- /*
- void add_IO_mapping(struct mapping **maps, unsigned char Pin, bool Pullup, bool Edge, unsigned char DeckNo, unsigned char Action, unsigned char Param)
-@@ -85,6 +85,8 @@ void IOevent(struct mapping *map, unsigned char MidiBuffer[3])
- 
- 	if (map != NULL)
- 	{
-+		// Mirror physical button presses out as USB-MIDI (cue/shift/startstop)
-+		sc_midi_out_io_event(map);
- 		//printf("Map notnull type:%d deck:%d po:%d edge:%d pin:%d action:%d param:%d\n", map->Type, map->DeckNo, map->port, map->Edge, map->Pin, map->Action, map->Param);
- 		//dump_maps();
- 		if (map->Action == ACTION_CUE)

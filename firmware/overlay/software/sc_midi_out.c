@@ -12,6 +12,9 @@
  *   CC 19  volume pot 2         (0..127)
  *   CC 20    jog, relative two's-complement 7-bit (1..63 fwd, 127..65 rev)
  *   CC 21    jog touch level, continuous 0/127 - re-sent every flush, robust to dropped edges
+ *   CC 22    capsense level (PIC smoothed touchAverage >> 3, 0..127; lower =
+ *            more touch) - the analog signal behind the CC21/Note20 verdict,
+ *            for host-side touch detection / margin tracing
  *   Note 20  jog touch edge (note-on touched / note-off released) - kept for edge-based hosts
  *   Note 21-24  buttons (PIC: sample/beat prev/next) - map any to start/stop etc.
  *   Note 25  Shift (front)        on while held, off on release
@@ -41,6 +44,7 @@
 #define CC_VOLUME2    19
 #define CC_JOG        20
 #define CC_JOGTOUCH   21 /* continuous jog-touch level (0/127), re-sent every flush */
+#define CC_CAPLEVEL   22 /* capsense analog level (10-bit >> 3), sent on change */
 #define NOTE_JOGTOUCH 20
 #define NOTE_BUTTON0  21 /* PIC buttons 0..3 -> notes 21..24 */
 
@@ -213,7 +217,8 @@ void sc_midi_out_io_event(const struct mapping *map)
 }
 
 void sc_midi_out_update(int encoderAngle, unsigned int adc0, unsigned int adc1,
-						unsigned int adc2, unsigned int adc3, bool touched)
+						unsigned int adc2, unsigned int adc3, bool touched,
+						unsigned int capLevel)
 {
 	static uint64_t lastFlush = 0;
 	static uint64_t lastTry = 0;
@@ -265,6 +270,11 @@ void sc_midi_out_update(int encoderAngle, unsigned int adc0, unsigned int adc1,
 			send3(0x80 | ch, NOTE_JOGTOUCH, 0);
 		prevTouched = tnow;
 	}
+
+	/* Capsense analog level behind that verdict (lower = more touch). Sent on
+	   change only - the PIC's EMA moves slowly, so this stays quiet at rest. */
+	static int prevCapLevel = -1;
+	send_cc(CC_CAPLEVEL, (int)(capLevel >> 3), &prevCapLevel, 1);
 
 	/* Buttons (PIC: back sample/beat prev/next) -> notes 21..24.
 	   Map any to start/stop, cue, load, etc. in the host. */

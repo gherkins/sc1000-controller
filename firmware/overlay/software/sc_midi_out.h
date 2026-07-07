@@ -44,9 +44,15 @@ void sc_midi_out_io_event(const struct mapping *map);
  *
  *   encoderAngle : 0..4095 absolute platter angle (already de-blipped/reversed)
  *   adc0..adc3   : 10-bit fader / pot ADC values (0..1023)
- *   touched      : capacitive jog-touch state
+ *   touched      : capacitive jog-touch state (the PIC's thresholded verdict)
+ *   capLevel     : 10-bit capsense level (0..1023) - the PIC's smoothed
+ *                  touchAverage from I2C regs 6/7, i.e. the continuous signal
+ *                  its touched/not-touched decision is based on. Lower = more
+ *                  touch. Lets the host see threshold margin / do its own
+ *                  detection.
  */
 void sc_midi_out_update(int encoderAngle, unsigned int adc0, unsigned int adc1,
-                        unsigned int adc2, unsigned int adc3, bool touched);
+                        unsigned int adc2, unsigned int adc3, bool touched,
+                        unsigned int capLevel);
 
 #endif
