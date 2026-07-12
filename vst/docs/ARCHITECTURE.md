@@ -311,6 +311,22 @@ from a release (no motion, no evidence) and releases until you move or re-grip (
 re-latches touch in ~3 samples). **Tape-stop** is still available as a slow-down (cap on
 + decelerating jog → follows it down to a held stop).
 
+**Measured live (2026-07-12, `s12-stophold` capture, servo-era build):** the dead-still
+cost is the *stop-hold stutter* — grab the playing record to a halt and just hold it, and
+the cap bit drops out on the resting finger for **200–1000 ms at a stretch**; each drop
+correctly reads as a release, the motor swells the record to 1× (`kSlipTau` ≈ 35 ms, so
+even a 100 ms drop swells to ~0.9) and the returning cap brakes it again — stop / play /
+stop. Both stop-hold attempts in the capture stuttered. No hold time fixes this: riding a
+1 s blind gap would make every *real* let-go mushy for that second, and gentle micro-
+wiggles don't qualify as hand evidence by design (`kCaptureFloor`). Workarounds: keep the
+record *decisively* moving while holding (real strokes renew evidence), or use transport
+Stop. **The clean fix is blocked on hardware:** the analog capsense level (CC 22) would
+let the gate hold whenever the level stays near the touch threshold (a resting finger)
+vs falling to baseline (a true lift) — but on the MK2 as shipped CC 22 reads a constant
+0 until the PIC is reflashed (PICkit via ICSP header J8; see MIDI-MAPPING.md). When that
+happens: decode CC 22 into `ControlState`, add it as a trace column, and gate stillness-
+releases on the level.
+
 Validated on captures (**all seven 2026-07-07 sessions replayed together** — always check a
 tuning change against ALL of them, they stress different regimes; the fixtures live in
 `vst/test/traces/`). Tunables at the top of `ScratchEngine.h`: `kAccelAbs`/`kAccelRel`
