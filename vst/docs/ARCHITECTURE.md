@@ -115,6 +115,45 @@ Matching this gives the same feel as the hardware. Reverse comes for free (negat
 deltas). The audio engine resamples between the previous and new playhead each
 block; rate (and direction) = (Δplayhead / blockDuration).
 
+### Jog → pitch: the position servo (default) vs counts-per-block (classic)
+
+Measuring hand velocity as **counts per block** quantizes the pitch: at 512-frame
+blocks one jog count ≈ 4% of 1× speed, so slow drags and bursty MIDI render as an
+audible FM staircase (a granular/warpy scratch). Since 2026-07-12 the engine instead
+runs a **position servo** (developed and validated in the catski port, back-ported
+here): jog counts integrate into a hand *position* which the pitch chases — smoothed
+velocity feedforward (`kServoVelTau`) plus position-error repayment over
+`kServoCatch` (with `kScratchTau` the grab loop is ζ≈0.7 — settles without ringing;
+`kServoErrMax` is the anti-windup clamp). ±1 count of position error is ~0.4 ms of
+record — inaudible — so the staircase vanishes while displacement tracking stays
+exact, and the playhead still only ever moves via speed/direction (no jumps). On the
+synthetic bursty worst case (a constant-speed hand whose counts land every other
+block) the pitch ripple is ~4.5× smaller at 512-frame blocks.
+
+Two boundaries matter:
+
+- **The servo models the hand, so it only runs while the cap reports one.** In the
+  touch gate's cap-off bridge the platter is a freewheel; chasing its position
+  unwinds the servo's standing error as a pitch wobble right in the slipmat
+  handover. Bridge blocks ride the counts-per-block path, so a release starts the
+  motor catch from the platter's true speed.
+- **Deadband**: the servo variant eats only an *isolated* ±1 count (at crawl speeds
+  single counts are most of the signal; the idle trickle never follows a moving
+  block), while the classic path keeps the plain `kJogDeadband`.
+
+`SC1000_SCRATCH_MODE=classic` (env var, read in `PluginProcessor`) restores
+counts-per-block everywhere — the verbatim pre-servo path. Keep it intact: the
+catski Rust port golden-trace-diffs its classic mode against ours 1:1, and
+`trace_replay` A/Bs feel changes by replaying a capture through both models
+(`make trace-replay MODE=servo|classic`).
+
+**Known feel artifact (open for tuning)**: on a **grab** (cap lands while the motor
+spins at 1×), the record slips past the hand while the pitch settles, and the servo
+counts that slip as position error and repays it — the record briefly plays
+*backward* (observed ≈ −0.36 peak on a synthetic grab, ≈ −0.09 in the s8 capture)
+while the hand drags forward. A real record slips under the finger and never claws
+back. Candidate fixes live entirely in the `servoErr` accounting at the grab edge.
+
 ## Touch sensing — the gate (`TouchGate.h`)
 
 The capacitive pad is a single noisy bit straight from the PIC (`sc_input.c`:

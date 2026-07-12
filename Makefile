@@ -58,12 +58,12 @@ trace: vst ## Capture a debug trace: run Standalone w/ logging → trace.csv (lo
 trace-analyze: ## Analyse a captured trace for touch mis-decisions (TRACE=path, default trace.csv)
 	@python3 $(VST)/tools/trace_analyze.py "$(TRACE)"
 
-trace-replay: ## Replay a capture through the CURRENT gate + re-analyse (TRACE=path, HANDHOLD=secs, RELEASEHOLD=secs)
+trace-replay: ## Replay a capture through the CURRENT gate + re-analyse (TRACE=path, HANDHOLD=secs, RELEASEHOLD=secs, MODE=servo|classic)
 	@SDK="$$(xcrun --show-sdk-path)"; WRAP=""; \
 	printf '#include <algorithm>\nint main(){return 0;}\n' | clang++ -x c++ -std=c++17 -fsyntax-only - 2>/dev/null \
 		|| WRAP="-nostdinc++ -isystem $$SDK/usr/include/c++/v1"; \
 	clang++ -std=c++17 $$WRAP -I$(VST)/src $(VST)/test/trace_replay.cpp -o $(VST)/build/trace_replay \
-		&& $(VST)/build/trace_replay "$(TRACE)" "$(TRACE).new.csv" $(HANDHOLD) $(RELEASEHOLD) \
+		&& $(VST)/build/trace_replay "$(TRACE)" "$(TRACE).new.csv" $(HANDHOLD) $(RELEASEHOLD) $(MODE) \
 		&& python3 $(VST)/tools/trace_analyze.py "$(TRACE).new.csv"
 
 touchtest: ## Build + run the TouchGate unit test (no JUCE, scratch-feel regression guard)
