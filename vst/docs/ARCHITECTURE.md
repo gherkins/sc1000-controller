@@ -147,12 +147,30 @@ catski Rust port golden-trace-diffs its classic mode against ours 1:1, and
 `trace_replay` A/Bs feel changes by replaying a capture through both models
 (`make trace-replay MODE=servo|classic`).
 
-**Known feel artifact (open for tuning)**: on a **grab** (cap lands while the motor
-spins at 1×), the record slips past the hand while the pitch settles, and the servo
-counts that slip as position error and repays it — the record briefly plays
-*backward* (observed ≈ −0.36 peak on a synthetic grab, ≈ −0.09 in the s8 capture)
-while the hand drags forward. A real record slips under the finger and never claws
-back. Candidate fixes live entirely in the `servoErr` accounting at the grab edge.
+**The slipmat write-off (the "claw-back" fix)**: on a **grab** (cap lands while the
+motor spins at 1×), the record slips past the hand while the pitch settles; the raw
+servo counted that slip as position error and repaid it — the record briefly played
+*backward* (≈ −0.36 peak on a synthetic grab, ≈ −0.09 in the s8 capture) while the
+hand dragged forward. A real record slips under the finger and never claws back. So:
+the servo may brake the record to a stop but never reverse it against the hand — if
+the target opposes the record's direction and the hand's own counts don't command
+the reversal, the target parks at 0 and the un-repayable error is written off as
+slip. The authority to reverse needs a **real count (`> kJogDeadband`)**: a lone ±1
+tick is encoder ripple (in the s10 capture two −1s amid a forward drag dumped the
+banked slip as a −0.27 reversal), and classic's deadband never acted on ±1 either —
+the position integration still keeps the ±1s. Genuine backspins (counts against the
+record) pass through untouched (hard backspin reaches −0.5× in 21 ms, same as
+without the clamp); bursty-ripple and displacement tracking are unchanged. Validated
+on the s10-grabs capture (50 grabs at ~1×): raw servo claw-backs on 7 of 13
+forward/hold grabs; with the write-off 0, worst post-grab pitch +0.001. The
+s11-crawl capture puts the staircase win on real hardware data: ultra-slow crawls
+(1–4 counts/block) halve the HF pitch ripple vs classic (σ 0.0152 → 0.0079) with
+better displacement tracking (1.9 ms vs 5.3 ms worst); the clamp costs crawls
+nothing (raw-servo vs write-off near-identical there). Tested but NOT adopted (add if a grab still
+feels sticky on hardware): seeding `servoV = 0` instead of `pitch` when engaging
+from a genuine release softens the near-stop on grab-and-slow-drag (min pitch
+0.02 → 0.06 of a 0.165 hand speed) at the cost of extra state; the seed must stay
+`pitch` for cap-flicker re-grabs mid-scratch, where pitch ≈ hand speed.
 
 ## Touch sensing — the gate (`TouchGate.h`)
 

@@ -232,6 +232,26 @@ public:
             servoErr = juce::jlimit (-kServoErrMax, kServoErrMax, servoErr + hand);
             servoV  += (1.0 - std::exp (-dt / kServoVelTau)) * (hand / dt - servoV);
             targetPitch = servoV + servoErr / kServoCatch;
+            // Slipmat write-off: the servo may brake the record to a stop but never
+            // spin it BACKWARD against the hand. A record grabbed at speed slips
+            // under the finger while the pitch settles; that slip is real slipmat
+            // slip, not position debt — repaying it reversed the record on every
+            // grab (the "claw-back": pitch 1.0 → −0.09 in the s8 capture while the
+            // hand dragged forward). If the target opposes the record's direction
+            // and the hand's own counts don't command the reversal, park the target
+            // at 0 and write the un-repayable error off as slip. Genuine backspins
+            // (hand counts against the record) pass through untouched — but the
+            // authority to reverse needs a REAL count (> kJogDeadband): a lone ±1
+            // tick is encoder ripple (s10 capture: two −1s amid a forward drag
+            // dumped the banked slip as a −0.27 reversal), and classic's deadband
+            // never acted on ±1 either. The position integration keeps the ±1s.
+            const int recDir  = (pitch > 0.0) - (pitch < 0.0);
+            const int handDir = (jogServo > kJogDeadband) - (jogServo < -kJogDeadband);
+            if (recDir != 0 && handDir != -recDir && targetPitch * (double) recDir < 0.0)
+            {
+                targetPitch = 0.0;
+                servoErr = (0.0 - servoV) * kServoCatch; // slip the slipmat already ate
+            }
             tau = kScratchTau;
         }
         else if (touchMode == TouchGate::Mode::Scratch)   // scratching: follow the jog

@@ -83,7 +83,17 @@ int main(int argc, char** argv)
             const double hand = (double) jogServo / kPlat;
             servoErr = std::fmin(kServoErrMax, std::fmax(-kServoErrMax, servoErr + hand));
             servoV += (1.0 - std::exp(-dt / kServoVelTau)) * (hand / dt - servoV);
-            target = servoV + servoErr / kServoCatch; tau = kScratchTau;
+            target = servoV + servoErr / kServoCatch;
+            // Slipmat write-off (mirror of ScratchEngine.h): never reverse against the hand;
+            // reversal authority needs a real count (> deadband), ±1 is ripple.
+            const int recDir  = (pitch > 0.0) - (pitch < 0.0);
+            const int handDir = (jogServo > 1) - (jogServo < -1);
+            if (recDir != 0 && handDir != -recDir && target * (double) recDir < 0.0)
+            {
+                target = 0.0;
+                servoErr = (0.0 - servoV) * kServoCatch;
+            }
+            tau = kScratchTau;
         }
         else if (m == TouchGate::Mode::Scratch)   { target = (n > 0) ? (double) jog * rate / (kPlat * n) : 0.0; tau = kScratchTau; }
         else if (m == TouchGate::Mode::Coast)     { target = pitch; tau = kScratchTau; }
