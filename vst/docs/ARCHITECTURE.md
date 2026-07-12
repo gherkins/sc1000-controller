@@ -137,9 +137,13 @@ Two boundaries matter:
   unwinds the servo's standing error as a pitch wobble right in the slipmat
   handover. Bridge blocks ride the counts-per-block path, so a release starts the
   motor catch from the platter's true speed.
-- **Deadband**: the servo variant eats only an *isolated* ±1 count (at crawl speeds
-  single counts are most of the signal; the idle trickle never follows a moving
-  block), while the classic path keeps the plain `kJogDeadband`.
+- **Deadband**: the servo variant eats only a *time-isolated* ±1 count — one with no
+  counts for `kServoTickGap` (10.6 ms) before it (at crawl speeds single counts are
+  most of the signal; the idle trickle never follows recent motion) — while the
+  classic path keeps the plain `kJogDeadband`. The window is time, not "previous
+  block": per-block rules change meaning with the host block size (at 256-frame
+  blocks a 94 c/s crawl is 1,0,1,0 — a prev-block test starved it dead; found when
+  catski's 256-frame blocks exposed it, see below).
 
 `SC1000_SCRATCH_MODE=classic` (env var, read in `PluginProcessor`) restores
 counts-per-block everywhere — the verbatim pre-servo path. Keep it intact: the
@@ -155,10 +159,16 @@ hand dragged forward. A real record slips under the finger and never claws back.
 the servo may brake the record to a stop but never reverse it against the hand — if
 the target opposes the record's direction and the hand's own counts don't command
 the reversal, the target parks at 0 and the un-repayable error is written off as
-slip. The authority to reverse needs a **real count (`> kJogDeadband`)**: a lone ±1
-tick is encoder ripple (in the s10 capture two −1s amid a forward drag dumped the
-banked slip as a −0.27 reversal), and classic's deadband never acted on ±1 either —
-the position integration still keeps the ±1s. Genuine backspins (counts against the
+slip. The authority to reverse is **counts/s, block-size independent** (a per-block
+count rule sat here first and parked genuine −1-per-block pulls at 256-frame blocks
+— catski, which runs 256, reported it as "slips while scratching"): one block of
+strong counts (≥ `kServoAuthNow` 375 c/s — a real stroke turnaround, instant) or the
+smoothed **pure-hand velocity** (`servoHandV`, never seeded from the pitch, beyond
+`kServoAuth` 100 c/s over `kServoAuthTau` 30 ms — genuine gentle pulls, within a
+couple of blocks). Ripple ticks reach neither: a lone ±1 is at most 187 c/s
+instantaneous and barely dents the EMA (in the s10 capture two −1s amid a forward
+drag had dumped the banked slip as a −0.27 reversal) — the position integration
+still keeps the ±1s. Genuine backspins (counts against the
 record) pass through untouched (hard backspin reaches −0.5× in 21 ms, same as
 without the clamp); bursty-ripple and displacement tracking are unchanged. Validated
 on the s10-grabs capture (50 grabs at ~1×): raw servo claw-backs on 7 of 13

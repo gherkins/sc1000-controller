@@ -87,6 +87,21 @@ public:
     static constexpr double kServoVelTau = 0.060; // s — hand-velocity feedforward smoothing
     static constexpr double kServoCatch  = 0.040; // s — position error repaid over this horizon
     static constexpr double kServoErrMax = 0.150; // s of record — anti-windup clamp on the lag
+    // Block-size-independent forms of what were per-block count rules (a count per
+    // block is a velocity, so its meaning halves when the host block does — tuned
+    // on 512-frame captures, and catski's 256-frame blocks proved the breakage:
+    // gentle −1-per-block pulls lost reversal authority and parked at 0):
+    static constexpr double kServoTickGap = 0.0106; // s — a ±1 with no counts for this long is
+                                                    // idle trickle (one 512-frame block @48k,
+                                                    // the validated capture cadence)
+    static constexpr double kServoAuthTau = 0.030; // s — smoothing of the pure-hand velocity
+                                                   // that grants reversal authority
+    static constexpr double kServoAuth    = 100.0; // counts/s — the hand must beat this (EMA)
+                                                   // to command a reversal; ripple ticks can't
+    static constexpr double kServoAuthNow = 375.0; // counts/s — a single block this strong
+                                                   // grants authority instantly (snappy stroke
+                                                   // turnarounds); a lone ±1 tick can't reach
+                                                   // it at any block size (187 c/s at 256)
 
     void prepare (double hostSampleRate)
     {
@@ -103,7 +118,8 @@ public:
         servoErr = 0.0;
         servoV = 0.0;
         servoEngaged = false;
-        prevJogActive = false;
+        jogQuietT = 1.0;
+        servoHandV = 0.0;
         touchGate.accelAbs     = kAccelAbs;
         touchGate.accelRel     = kAccelRel;
         touchGate.freewheelDecel = kFreewheelDecel;
@@ -177,10 +193,19 @@ public:
         // --- jog: ignore the isolated ±1 idle trickle the encoder emits at rest ---
         const int rawJog = cs.consumeJog();
         const int jog    = (std::abs (rawJog) <= kJogDeadband) ? 0 : rawJog;
+        const double dt  = (double) n / hostRate;
         // Servo variant: eat only an *isolated* ±1 — at crawl speeds single counts
-        // are most of the signal, and the idle trickle never follows a moving block.
-        const int jogServo = (std::abs (rawJog) <= kJogDeadband && ! prevJogActive) ? 0 : rawJog;
-        prevJogActive = rawJog != 0;
+        // are most of the signal, and the idle trickle never follows recent motion.
+        // "Isolated" is a TIME window (kServoTickGap), not "previous block": per-
+        // block rules change meaning with the host block size (at 256-frame blocks
+        // a 94 c/s crawl is 1,0,1,0 — a prev-block test ate all of it dead).
+        const int jogServo = (std::abs (rawJog) <= kJogDeadband && jogQuietT >= kServoTickGap)
+                                 ? 0 : rawJog;
+        jogQuietT = (rawJog != 0) ? 0.0 : jogQuietT + dt;
+        // Smoothed pure-hand velocity (counts/s) — the reversal-authority signal for
+        // the slipmat write-off below. Unlike servoV it is never seeded from the
+        // pitch, so a spinning record can't fake hand motion.
+        servoHandV += (1.0 - std::exp (-dt / kServoAuthTau)) * ((double) jogServo / dt - servoHandV);
 
         // --- virtual motor: 1× when playing; brakes to 0 on stop (tape stop) ---
         // Computed BEFORE the touch gate because the gate needs to know whether the
@@ -211,7 +236,6 @@ public:
         //     a held platter eases to a stop rather than fighting the motor);
         //     coast → hold speed briefly (riding a cap-off flicker before a real release);
         //     released → slip toward the motor (a real lift). ---
-        const double dt = (double) n / hostRate;
         // The servo models the HAND — it only runs while the cap reports one. In
         // the gate's cap-off bridge (and the hand-evidence fallback) the platter
         // is freewheeling: chasing its position unwinds the servo's standing error
@@ -238,15 +262,21 @@ public:
             // slip, not position debt — repaying it reversed the record on every
             // grab (the "claw-back": pitch 1.0 → −0.09 in the s8 capture while the
             // hand dragged forward). If the target opposes the record's direction
-            // and the hand's own counts don't command the reversal, park the target
-            // at 0 and write the un-repayable error off as slip. Genuine backspins
-            // (hand counts against the record) pass through untouched — but the
-            // authority to reverse needs a REAL count (> kJogDeadband): a lone ±1
-            // tick is encoder ripple (s10 capture: two −1s amid a forward drag
-            // dumped the banked slip as a −0.27 reversal), and classic's deadband
-            // never acted on ±1 either. The position integration keeps the ±1s.
+            // and the hand doesn't command the reversal, park the target at 0 and
+            // write the un-repayable error off as slip. Reversal authority: a
+            // single block of strong counts (≥ kServoAuthNow — a real stroke
+            // turnaround, instantly), else the smoothed hand velocity (servoHandV
+            // beyond kServoAuth — a genuine gentle pull, within a couple of
+            // blocks). Ripple ticks reach neither (s10 capture: two −1s amid a
+            // forward drag dumped the banked slip as a −0.27 reversal). Both
+            // thresholds are counts/s, so the rule means the same at any host
+            // block size — a per-block count test sat here first and parked real
+            // −1-per-block pulls at 256-frame blocks (caught in catski).
+            const double handNow = (double) jogServo / dt;
             const int recDir  = (pitch > 0.0) - (pitch < 0.0);
-            const int handDir = (jogServo > kJogDeadband) - (jogServo < -kJogDeadband);
+            const int handDir = (std::abs (handNow) >= kServoAuthNow)
+                                    ? ((handNow > 0.0) - (handNow < 0.0))
+                                    : ((servoHandV > kServoAuth) - (servoHandV < -kServoAuth));
             if (recDir != 0 && handDir != -recDir && targetPitch * (double) recDir < 0.0)
             {
                 targetPitch = 0.0;
@@ -431,7 +461,8 @@ private:
     double servoErr     = 0.0;   // record-seconds the playhead lags the hand (hand − played)
     double servoV       = 0.0;   // smoothed hand velocity (1× units)
     bool   servoEngaged = false; // was in servo-scratch last block (edge → resync to the hand)
-    bool   prevJogActive = false; // last block's raw jog ≠ 0 (isolated-trickle deadband)
+    double jogQuietT    = 1.0;   // s since the last raw jog count (isolated-trickle deadband)
+    double servoHandV   = 0.0;   // smoothed pure-hand velocity, counts/s (reversal authority)
     double pitchScaleSm = 1.0; // smoothed varispeed multiplier (pitch fader, cue 1)
     double motorSpeed = 0.0; // motor target (1 playing, brakes to 0 on stop)
     double faderVol   = 0.0; // smoothed crossfader cut gain

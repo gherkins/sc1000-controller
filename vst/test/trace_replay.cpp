@@ -45,9 +45,11 @@ int main(int argc, char** argv)
     // the plugin — lets the analyzer's [R]/[2] (pitch-based) score the replayed gate.
     constexpr double kPlat = 2275.0, kScratchTau = 0.020, kSlipTau = 0.035;
     constexpr double kServoVelTau = 0.060, kServoCatch = 0.040, kServoErrMax = 0.150;
+    constexpr double kServoTickGap = 0.0106, kServoAuthTau = 0.030;
+    constexpr double kServoAuth = 100.0, kServoAuthNow = 375.0;
     double pitch = 0.0;
-    double servoErr = 0.0, servoV = 0.0;
-    bool servoEngaged = false, prevJogActive = false;
+    double servoErr = 0.0, servoV = 0.0, servoHandV = 0.0, jogQuietT = 1.0;
+    bool servoEngaged = false;
 
     char line[512];
     bool header = true;
@@ -68,12 +70,13 @@ int main(int argc, char** argv)
         if (prevT >= 0 && t > prevT) rate = prevN / (t - prevT);
         prevT = t; prevN = n;
         g.configure(rate);
-        // Servo deadband variant: eat only an *isolated* ±1 (ScratchEngine.h).
-        const int jogServo = (std::abs(rawJog) <= 1 && !prevJogActive) ? 0 : rawJog;
-        prevJogActive = rawJog != 0;
+        const double dt = (double) n / rate;
+        // Servo deadband variant: eat only a time-isolated ±1 (ScratchEngine.h).
+        const int jogServo = (std::abs(rawJog) <= 1 && jogQuietT >= kServoTickGap) ? 0 : rawJog;
+        jogQuietT = (rawJog != 0) ? 0.0 : jogQuietT + dt;
+        servoHandV += (1.0 - std::exp(-dt / kServoAuthTau)) * ((double) jogServo / dt - servoHandV);
         auto m = g.process(n, rawTouch != 0, jog, motorSpeed);
         // recompute pitch with the same model the engine uses
-        const double dt = (double) n / rate;
         const bool servoScratch = servo && rawTouch != 0 && m == TouchGate::Mode::Scratch;
         if (servoScratch && !servoEngaged) { servoErr = 0.0; servoV = pitch; }
         servoEngaged = servoScratch;
@@ -85,9 +88,12 @@ int main(int argc, char** argv)
             servoV += (1.0 - std::exp(-dt / kServoVelTau)) * (hand / dt - servoV);
             target = servoV + servoErr / kServoCatch;
             // Slipmat write-off (mirror of ScratchEngine.h): never reverse against the hand;
-            // reversal authority needs a real count (> deadband), ±1 is ripple.
+            // authority = one strong block (counts/s) or the pure-hand velocity EMA.
+            const double handNow = (double) jogServo / dt;
             const int recDir  = (pitch > 0.0) - (pitch < 0.0);
-            const int handDir = (jogServo > 1) - (jogServo < -1);
+            const int handDir = (std::abs(handNow) >= kServoAuthNow)
+                                    ? ((handNow > 0.0) - (handNow < 0.0))
+                                    : ((servoHandV > kServoAuth) - (servoHandV < -kServoAuth));
             if (recDir != 0 && handDir != -recDir && target * (double) recDir < 0.0)
             {
                 target = 0.0;
