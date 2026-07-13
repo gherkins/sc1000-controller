@@ -91,11 +91,15 @@ ScratchAudioProcessor::ScratchAudioProcessor()
 {
     formatManager.registerBasicFormats();
     tracePath = juce::SystemStats::getEnvironmentVariable ("SC1000_TRACE", {}); // debug capture (see TraceLog.h)
-    // Jog→pitch model: position servo by default; classic restores the verbatim
-    // counts-per-block path (required when capturing golden traces to diff against
-    // the catski port) — see the kServo* block in ScratchEngine.h.
-    if (juce::SystemStats::getEnvironmentVariable ("SC1000_SCRATCH_MODE", {}).equalsIgnoreCase ("classic"))
-        engine.setServo (false);
+    // Jog→pitch model: velocity mode by default (the 2026-07-13 hands-on A/B
+    // winner — see the kVelTau block in ScratchEngine.h); servo restores the
+    // position servo; classic the verbatim counts-per-block path (required when
+    // capturing golden traces to diff against the catski port).
+    const auto scratchMode = juce::SystemStats::getEnvironmentVariable ("SC1000_SCRATCH_MODE", {});
+    if (scratchMode.equalsIgnoreCase ("classic"))
+        engine.setJogMode (ScratchEngine::JogMode::Classic);
+    else if (scratchMode.equalsIgnoreCase ("servo"))
+        engine.setJogMode (ScratchEngine::JogMode::Servo);
 }
 
 void ScratchAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerBlock*/)

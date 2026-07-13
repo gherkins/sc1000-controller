@@ -30,6 +30,16 @@
 class ScratchEngine
 {
 public:
+    // The jog→pitch model for the touched (scratch) path. Selected once at boot
+    // via SC1000_SCRATCH_MODE; everything else (touch gate, motor, slipmat
+    // release, crossfader) is identical across modes. Mirrors catski's JogMode.
+    enum class JogMode
+    {
+        Servo,    // position servo: exact displacement, catch-up repayment (kServo*)
+        Velocity, // DEFAULT: smoothed-velocity feedforward only (kVelTau) — no catch-up
+        Classic,  // verbatim counts-per-block (the golden-trace contract with catski)
+    };
+
     static constexpr double kPlatterSpeed = 2275.0; // jog counts per audio-second (≈ 33 rpm)
     static constexpr double kScratchTau   = 0.020;  // jog→pitch smoothing (s) — kills per-block MIDI jitter
     // Strict hand-evidence touch gate (TouchGate.h): cap-off RELEASES fast — always —
@@ -67,7 +77,8 @@ public:
     static constexpr double kCurveSharpKnee = 0.01; // fader travel to reach full at the sharpest curve (≈ hard cut)
     static constexpr double kPitchTau       = 0.030;// pitch-fader (varispeed) smoothing (s) — de-click step changes
 
-    // --- position-servo jog→pitch (the default scratch model) ---
+    // --- position-servo jog→pitch (SC1000_SCRATCH_MODE=servo; the default
+    // 2026-07-12 → 2026-07-13, until velocity mode won the hands-on A/B) ---
     // Measuring hand velocity as counts-per-block makes one jog count ≈ 8% of 1×
     // speed at 256-frame blocks, so slow drags and bursty MIDI render as an audible
     // FM staircase (the "granular" scratch sound). The servo treats the encoder the
@@ -103,6 +114,23 @@ public:
                                                    // turnarounds); a lone ±1 tick can't reach
                                                    // it at any block size (187 c/s at 256)
 
+    // --- velocity-only jog→pitch (the DEFAULT since 2026-07-13 — it won the
+    // hands-on A/B against the servo "by far"; developed in catski, mirrored
+    // here) ---
+    // The servo's position repayment plays catch-up ABOVE the hand's speed once
+    // the smoothing lag has banked error — a real record never accelerates past
+    // the hand to repay slip; under the hands the servo read as "amplified".
+    // This mode keeps only the smoothed-velocity feedforward: the same
+    // staircase fix (a time-based EMA instead of raw counts-per-block), but the
+    // record trails the hand by the smoothing lag and coasts it in after the
+    // stroke, never repaid faster. It deliberately feeds on the CLASSIC
+    // ±1-per-block deadband, so classic's slow-speed compliance knee (dead
+    // below ~0.08×, the slipmat drag hands are calibrated to) is kept — the
+    // servo's linear-from-zero crawl response was the other half of the
+    // sensitivity report. No error ledger → a grab can never claw back, no
+    // write-off machinery needed.
+    static constexpr double kVelTau = 0.020; // s — hand-velocity EMA; the smooth↔snappy knob
+
     void prepare (double hostSampleRate)
     {
         hostRate = hostSampleRate;
@@ -120,6 +148,7 @@ public:
         servoEngaged = false;
         jogQuietT = 1.0;
         servoHandV = 0.0;
+        velV = 0.0;
         touchGate.accelAbs     = kAccelAbs;
         touchGate.accelRel     = kAccelRel;
         touchGate.freewheelDecel = kFreewheelDecel;
@@ -134,10 +163,9 @@ public:
         touchGate.reset();
     }
 
-    // Choose the jog→pitch model: true = position servo (the default — smooth slow
-    // drags), false = the counts-per-block path (SC1000_SCRATCH_MODE=classic).
+    // Choose the jog→pitch model (see JogMode; Velocity is the default).
     // Call before audio starts (the processor constructor) — not thread-safe live.
-    void setServo (bool on) noexcept { servo = on; }
+    void setJogMode (JogMode mode) noexcept { jogMode = mode; }
 
     // Debug capture (off unless SC1000_TRACE is set — see TraceLog.h). enableTrace
     // pre-reserves off the audio thread; dumpTrace writes the CSV on teardown.
@@ -206,6 +234,10 @@ public:
         // the slipmat write-off below. Unlike servoV it is never seeded from the
         // pitch, so a spinning record can't fake hand motion.
         servoHandV += (1.0 - std::exp (-dt / kServoAuthTau)) * ((double) jogServo / dt - servoHandV);
+        // Velocity-mode hand estimate: a time-based EMA of the CLASSIC-deadbanded
+        // counts (see the kVelTau block — the knee is deliberate). Updated every
+        // block so the cap-off bridge rides the platter's true smoothed speed.
+        velV += (1.0 - std::exp (-dt / kVelTau)) * ((double) jog / (dt * kPlatterSpeed) - velV);
 
         // --- virtual motor: 1× when playing; brakes to 0 on stop (tape stop) ---
         // Computed BEFORE the touch gate because the gate needs to know whether the
@@ -241,7 +273,8 @@ public:
         // is freewheeling: chasing its position unwinds the servo's standing error
         // as a pitch wobble right in the slipmat handover, so those blocks ride
         // the counts-per-block path instead.
-        const bool servoScratch = servo && rawTouch && touchMode == TouchGate::Mode::Scratch;
+        const bool servoScratch = jogMode == JogMode::Servo && rawTouch
+                                  && touchMode == TouchGate::Mode::Scratch;
         if (servoScratch && ! servoEngaged)
         {
             servoErr = 0.0; // the hand position is defined from the grab
@@ -282,6 +315,14 @@ public:
                 targetPitch = 0.0;
                 servoErr = (0.0 - servoV) * kServoCatch; // slip the slipmat already ate
             }
+            tau = kScratchTau;
+        }
+        else if (touchMode == TouchGate::Mode::Scratch && jogMode == JogMode::Velocity)
+        {
+            // Velocity mode: the feedforward alone — no position error, so no
+            // catch-up and nothing to write off. Runs in the cap-off bridge too
+            // (the EMA of real counts *is* the freewheel's speed, smoothed).
+            targetPitch = velV;
             tau = kScratchTau;
         }
         else if (touchMode == TouchGate::Mode::Scratch)   // scratching: follow the jog
@@ -457,12 +498,13 @@ private:
     // Motor / slipmat / crossfader-cut / touch state (audio thread only).
     TouchGate touchGate;     // decides scratch vs. release from the cap bit + motor + jog
     double pitch      = 0.0; // current platter speed (1× units)
-    bool   servo        = true;  // jog→pitch model: position servo (false = counts-per-block)
+    JogMode jogMode     = JogMode::Velocity; // jog→pitch model (see enum above)
     double servoErr     = 0.0;   // record-seconds the playhead lags the hand (hand − played)
     double servoV       = 0.0;   // smoothed hand velocity (1× units)
     bool   servoEngaged = false; // was in servo-scratch last block (edge → resync to the hand)
     double jogQuietT    = 1.0;   // s since the last raw jog count (isolated-trickle deadband)
     double servoHandV   = 0.0;   // smoothed pure-hand velocity, counts/s (reversal authority)
+    double velV         = 0.0;   // velocity-mode hand estimate, 1× units (see kVelTau)
     double pitchScaleSm = 1.0; // smoothed varispeed multiplier (pitch fader, cue 1)
     double motorSpeed = 0.0; // motor target (1 playing, brakes to 0 on stop)
     double faderVol   = 0.0; // smoothed crossfader cut gain

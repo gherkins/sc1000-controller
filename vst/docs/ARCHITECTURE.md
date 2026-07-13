@@ -115,22 +115,36 @@ Matching this gives the same feel as the hardware. Reverse comes for free (negat
 deltas). The audio engine resamples between the previous and new playhead each
 block; rate (and direction) = (Δplayhead / blockDuration).
 
-### Jog → pitch: the position servo (default) vs counts-per-block (classic)
+### Jog → pitch: velocity mode (default) vs the position servo vs counts-per-block (classic)
 
 Measuring hand velocity as **counts per block** quantizes the pitch: at 512-frame
 blocks one jog count ≈ 4% of 1× speed, so slow drags and bursty MIDI render as an
-audible FM staircase (a granular/warpy scratch). Since 2026-07-12 the engine instead
-runs a **position servo** (developed and validated in the catski port, back-ported
-here): jog counts integrate into a hand *position* which the pitch chases — smoothed
-velocity feedforward (`kServoVelTau`) plus position-error repayment over
-`kServoCatch` (with `kScratchTau` the grab loop is ζ≈0.7 — settles without ringing;
-`kServoErrMax` is the anti-windup clamp). ±1 count of position error is ~0.4 ms of
-record — inaudible — so the staircase vanishes while displacement tracking stays
-exact, and the playhead still only ever moves via speed/direction (no jumps). On the
-synthetic bursty worst case (a constant-speed hand whose counts land every other
-block) the pitch ripple is ~4.5× smaller at 512-frame blocks.
+audible FM staircase (a granular/warpy scratch). The engine's default since
+2026-07-13 is **velocity mode** (`kVelTau`, mirrored from catski where it won the
+hands-on A/B "by far"): the classic-deadbanded counts feed a **time-based EMA**
+whose output is the pitch target directly. That alone kills the staircase; there
+is deliberately **no position ledger** — the record trails the hand by the
+smoothing lag and coasts it in after the stroke, never accelerating past the hand
+to repay slip, and classic's ±1-per-block deadband knee (the slow-speed slipmat
+compliance, dead below ~0.08×) is kept. Both were the difference between the
+servo "feeling amplified" under the hands and feeling like vinyl.
 
-Two boundaries matter:
+The **position servo** (2026-07-12 → 2026-07-13 the default, now
+`SC1000_SCRATCH_MODE=servo`) goes further: jog counts integrate into a hand
+*position* which the pitch chases — smoothed velocity feedforward (`kServoVelTau`)
+plus position-error repayment over `kServoCatch` (with `kScratchTau` the grab loop
+is ζ≈0.7 — settles without ringing; `kServoErrMax` is the anti-windup clamp). ±1
+count of position error is ~0.4 ms of record — inaudible — so the staircase
+vanishes while displacement tracking stays exact, and the playhead still only ever
+moves via speed/direction (no jumps). On the synthetic bursty worst case (a
+constant-speed hand whose counts land every other block) the pitch ripple is ~4.5×
+smaller at 512-frame blocks. Exactness is also what cost it the A/B: repaying the
+banked lag means transiently running **above** the hand's speed — physically
+un-vinyl, felt as amplification.
+
+Two boundaries matter (for the servo; velocity mode needs neither — its EMA of
+real counts *is* the freewheel's smoothed speed in the bridge, and it feeds on the
+plain classic deadband):
 
 - **The servo models the hand, so it only runs while the cap reports one.** In the
   touch gate's cap-off bridge the platter is a freewheel; chasing its position
@@ -145,11 +159,12 @@ Two boundaries matter:
   blocks a 94 c/s crawl is 1,0,1,0 — a prev-block test starved it dead; found when
   catski's 256-frame blocks exposed it, see below).
 
-`SC1000_SCRATCH_MODE=classic` (env var, read in `PluginProcessor`) restores
-counts-per-block everywhere — the verbatim pre-servo path. Keep it intact: the
-catski Rust port golden-trace-diffs its classic mode against ours 1:1, and
-`trace_replay` A/Bs feel changes by replaying a capture through both models
-(`make trace-replay MODE=servo|classic`).
+`SC1000_SCRATCH_MODE` (env var, read in `PluginProcessor`) selects the model:
+`servo` for the position servo, `classic` for counts-per-block everywhere — the
+verbatim original path. Keep classic intact: the catski Rust port
+golden-trace-diffs its classic mode against ours 1:1, and `trace_replay` A/Bs
+feel changes by replaying a capture through the models
+(`make trace-replay MODE=velocity|servo|classic`).
 
 **The slipmat write-off (the "claw-back" fix)**: on a **grab** (cap lands while the
 motor spins at 1×), the record slips past the hand while the pitch settles; the raw

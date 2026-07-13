@@ -5,12 +5,13 @@
 // carried over unchanged (stale).
 //
 //   clang++ -std=c++17 -I../src trace_replay.cpp -o trace_replay
-//   ./trace_replay in.csv out.csv [handHoldSec] [releaseHoldSec] [servo|classic]
+//   ./trace_replay in.csv out.csv [handHoldSec] [releaseHoldSec] [velocity|servo|classic]
 //   python3 trace_analyze.py out.csv
 //
-// The pitch is recomputed with the jog→pitch model the engine would use: the position
-// servo by default, or `classic` for the counts-per-block path (mirror of
-// SC1000_SCRATCH_MODE) — replay a capture both ways to A/B a feel change offline.
+// The pitch is recomputed with the jog→pitch model the engine would use: velocity
+// mode by default, `servo` for the position servo, or `classic` for the
+// counts-per-block path (mirror of SC1000_SCRATCH_MODE) — replay a capture each
+// way to A/B a feel change offline.
 #include "TouchGate.h"
 #include <cstdio>
 #include <cstdlib>
@@ -21,21 +22,23 @@
 
 int main(int argc, char** argv)
 {
-    if (argc < 3) { std::fprintf(stderr, "usage: trace_replay in.csv out.csv [handHoldSec] [releaseHoldSec] [servo|classic]\n"); return 2; }
+    if (argc < 3) { std::fprintf(stderr, "usage: trace_replay in.csv out.csv [handHoldSec] [releaseHoldSec] [velocity|servo|classic]\n"); return 2; }
     FILE* in = std::fopen(argv[1], "r");
     if (!in) { std::fprintf(stderr, "cannot open %s\n", argv[1]); return 2; }
     FILE* out = std::fopen(argv[2], "w");
     if (!out) { std::fprintf(stderr, "cannot write %s\n", argv[2]); return 2; }
 
     TouchGate g;
-    bool servo = true;
-    // Positional numbers = handHold then releaseHold; the words servo/classic pick
-    // the jog→pitch model anywhere after the two paths.
+    enum class Mode { Servo, Velocity, Classic };
+    Mode mode = Mode::Velocity;
+    // Positional numbers = handHold then releaseHold; the words velocity/servo/
+    // classic pick the jog→pitch model anywhere after the two paths.
     for (int i = 3, pos = 0; i < argc; ++i)
     {
         const std::string a = argv[i];
-        if      (a == "servo")   servo = true;
-        else if (a == "classic") servo = false;
+        if      (a == "velocity") mode = Mode::Velocity;
+        else if (a == "servo")    mode = Mode::Servo;
+        else if (a == "classic")  mode = Mode::Classic;
         else if (pos == 0) { g.handHold    = std::stod(a); ++pos; }
         else if (pos == 1) { g.releaseHold = std::stod(a); ++pos; }
         else { std::fprintf(stderr, "unexpected arg: %s\n", a.c_str()); return 2; }
@@ -47,8 +50,9 @@ int main(int argc, char** argv)
     constexpr double kServoVelTau = 0.060, kServoCatch = 0.040, kServoErrMax = 0.150;
     constexpr double kServoTickGap = 0.0106, kServoAuthTau = 0.030;
     constexpr double kServoAuth = 100.0, kServoAuthNow = 375.0;
+    constexpr double kVelTau = 0.020;
     double pitch = 0.0;
-    double servoErr = 0.0, servoV = 0.0, servoHandV = 0.0, jogQuietT = 1.0;
+    double servoErr = 0.0, servoV = 0.0, servoHandV = 0.0, jogQuietT = 1.0, velV = 0.0;
     bool servoEngaged = false;
 
     char line[512];
@@ -75,9 +79,10 @@ int main(int argc, char** argv)
         const int jogServo = (std::abs(rawJog) <= 1 && jogQuietT >= kServoTickGap) ? 0 : rawJog;
         jogQuietT = (rawJog != 0) ? 0.0 : jogQuietT + dt;
         servoHandV += (1.0 - std::exp(-dt / kServoAuthTau)) * ((double) jogServo / dt - servoHandV);
+        velV += (1.0 - std::exp(-dt / kVelTau)) * ((double) jog / (dt * kPlat) - velV);
         auto m = g.process(n, rawTouch != 0, jog, motorSpeed);
         // recompute pitch with the same model the engine uses
-        const bool servoScratch = servo && rawTouch != 0 && m == TouchGate::Mode::Scratch;
+        const bool servoScratch = mode == Mode::Servo && rawTouch != 0 && m == TouchGate::Mode::Scratch;
         if (servoScratch && !servoEngaged) { servoErr = 0.0; servoV = pitch; }
         servoEngaged = servoScratch;
         double target, tau;
@@ -101,6 +106,8 @@ int main(int argc, char** argv)
             }
             tau = kScratchTau;
         }
+        else if (m == TouchGate::Mode::Scratch && mode == Mode::Velocity)
+                                                  { target = velV; tau = kScratchTau; }
         else if (m == TouchGate::Mode::Scratch)   { target = (n > 0) ? (double) jog * rate / (kPlat * n) : 0.0; tau = kScratchTau; }
         else if (m == TouchGate::Mode::Coast)     { target = pitch; tau = kScratchTau; }
         else                                      { target = motorSpeed; tau = kSlipTau; }
